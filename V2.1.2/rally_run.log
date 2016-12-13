@@ -1,0 +1,244 @@
+----------------------------------------------------------------------------
+Rally Test Start
+----------------------------------------------------------------------------
+boot-and-delete-server-with-keypairs.json
+----------------------------------------------------------------------------
+2016-12-13 17:28:03.177 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Task validation.
+2016-12-13 17:28:03.314 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Task validation of scenarios names.
+2016-12-13 17:28:03.318 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Task validation of scenarios names.
+2016-12-13 17:28:03.318 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Task validation of syntax.
+2016-12-13 17:28:03.323 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Task validation of syntax.
+2016-12-13 17:28:03.323 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Task validation of semantic.
+2016-12-13 17:28:03.323 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Task validation check cloud.
+2016-12-13 17:28:08.035 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Task validation check cloud.
+2016-12-13 17:28:08.044 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Enter context: `users`
+2016-12-13 17:28:23.318 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Enter context: `users`
+2016-12-13 17:29:33.080 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Exit context: `users`
+2016-12-13 17:30:07.200 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Exit context: `users`
+2016-12-13 17:30:07.200 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Task validation of semantic.
+2016-12-13 17:30:07.200 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Task validation.
+2016-12-13 17:30:07.210 4670 INFO rally.api [-] Benchmark Task eb0cc3f9-0b79-4052-9f21-34167ca22058 on Deployment 7cb12bcc-ba92-4520-b50d-1503d94e23a0
+2016-12-13 17:30:07.211 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Benchmarking.
+2016-12-13 17:30:07.367 4670 INFO rally.task.engine [-] Running benchmark with key: 
+{
+  "kw": {
+    "runner": {
+      "type": "constant", 
+      "concurrency": 1, 
+      "times": 1
+    }, 
+    "args": {
+      "flavor": {
+        "name": "large-scale-100-1P-2G-30G"
+      }, 
+      "boot_server_kwargs": {}, 
+      "image": {
+        "name": "root_centos"
+      }
+    }, 
+    "context": {
+      "users": {
+        "users_per_tenant": 10, 
+        "tenants": 2
+      }, 
+      "roles": [
+        "app_admin"
+      ], 
+      "network": {
+        "start_cidr": "100.10.0.0/26"
+      }
+    }
+  }, 
+  "name": "NovaKeypair.boot_and_delete_server_with_keypair", 
+  "pos": 0
+}
+2016-12-13 17:30:07.373 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Enter context: `users`
+2016-12-13 17:30:17.683 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Enter context: `users`
+2016-12-13 17:30:17.684 4670 INFO rally.plugins.openstack.context.keystone.roles [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Enter context: `roles`
+2016-12-13 17:30:24.063 4670 INFO rally.plugins.openstack.context.keystone.roles [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Enter context: `roles`
+2016-12-13 17:30:24.063 4670 INFO rally.plugins.openstack.context.network.networks [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Enter context: `network`
+2016-12-13 17:30:32.687 4670 INFO rally.plugins.openstack.context.network.networks [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Enter context: `network`
+--------------------------------------------------------------------------------
+ Preparing input task
+--------------------------------------------------------------------------------
+
+Input task is:
+
+{
+    "NovaKeypair.boot_and_delete_server_with_keypair": [
+        {
+            "args": {
+                "flavor": {
+                    "name": "large-scale-100-1P-2G-30G"
+                },
+                "image": {
+                    "name": "root_centos"
+                },
+                "boot_server_kwargs": {}
+            },
+            "runner": {
+                "type": "constant",
+                "times": 1,
+                "concurrency": 1
+            },
+            "context": {
+                "roles": ["app_admin"],
+                "users": {
+                    "tenants": 2,
+                    "users_per_tenant": 10
+                },
+                "network": {
+                    "start_cidr": "100.10.0.0/26"
+                }
+            }
+        }
+    ]
+}
+
+
+
+Task syntax is correct :)
+Task config is valid :)
+--------------------------------------------------------------------------------
+ Task  eb0cc3f9-0b79-4052-9f21-34167ca22058: started
+--------------------------------------------------------------------------------
+
+Benchmarking... This can take a while...
+
+To track task status use:
+
+	rally task status
+	or
+	rally task detailed
+
+Using task: eb0cc3f9-0b79-4052-9f21-34167ca22058
+2016-12-13 17:31:34.251 4883 INFO rally.task.runner [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | ITER: 0 START
+2016-12-13 17:31:49.592 4883 WARNING rally.common.logging [-] 'wait_for' is deprecated in Rally v0.1.2: Use wait_for_status instead.
+2016-12-13 17:32:56.007 4883 INFO rally.task.runner [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | ITER: 0 END: OK
+2016-12-13 17:32:56.015 4670 INFO rally.plugins.openstack.context.cleanup.user [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  user resources cleanup
+2016-12-13 17:36:49.789 4670 INFO rally.plugins.openstack.context.cleanup.user [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: user resources cleanup
+2016-12-13 17:36:49.790 4670 INFO rally.plugins.openstack.context.network.networks [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Exit context: `network`
+2016-12-13 17:37:04.178 4670 INFO rally.plugins.openstack.context.network.networks [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Exit context: `network`
+2016-12-13 17:37:04.178 4670 INFO rally.plugins.openstack.context.keystone.roles [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Exit context: `roles`
+2016-12-13 17:37:13.103 4670 INFO rally.plugins.openstack.context.keystone.roles [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Exit context: `roles`
+2016-12-13 17:37:13.104 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Starting:  Exit context: `users`
+2016-12-13 17:37:34.459 4670 INFO rally.plugins.openstack.context.keystone.users [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Exit context: `users`
+2016-12-13 17:37:34.683 4670 INFO rally.task.engine [-] Load duration is: 81.7553539276
+2016-12-13 17:37:34.683 4670 INFO rally.task.engine [-] Full runner duration is: 81.7917878628
+2016-12-13 17:37:34.683 4670 INFO rally.task.engine [-] Full duration is 447.08691597
+2016-12-13 17:37:35.041 4670 INFO rally.task.engine [-] Task eb0cc3f9-0b79-4052-9f21-34167ca22058 | Completed: Benchmarking.
+
+--------------------------------------------------------------------------------
+Task eb0cc3f9-0b79-4052-9f21-34167ca22058: finished
+--------------------------------------------------------------------------------
+
+test scenario NovaKeypair.boot_and_delete_server_with_keypair
+args position 0
+args values:
+{
+  "runner": {
+    "type": "constant", 
+    "concurrency": 1, 
+    "times": 1
+  }, 
+  "args": {
+    "flavor": {
+      "name": "large-scale-100-1P-2G-30G"
+    }, 
+    "boot_server_kwargs": {}, 
+    "image": {
+      "name": "root_centos"
+    }
+  }, 
+  "context": {
+    "users": {
+      "users_per_tenant": 10, 
+      "project_domain": "default", 
+      "user_choice_method": "random", 
+      "user_domain": "default", 
+      "tenants": 2, 
+      "resource_management_workers": 20
+    }, 
+    "roles": [
+      "app_admin"
+    ], 
+    "network": {
+      "network_create_args": {}, 
+      "subnets_per_network": 1, 
+      "start_cidr": "100.10.0.0/26", 
+      "dns_nameservers": null, 
+      "networks_per_tenant": 1
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+ Task eb0cc3f9-0b79-4052-9f21-34167ca22058 has 0 error(s)
+--------------------------------------------------------------------------------
+
++------------------------------------------------------------------------------------------------------------------------+
+|                                                  Response Times (sec)                                                  |
++---------------------+-----------+--------------+--------------+--------------+-----------+-----------+---------+-------+
+| Action              | Min (sec) | Median (sec) | 90%ile (sec) | 95%ile (sec) | Max (sec) | Avg (sec) | Success | Count |
++---------------------+-----------+--------------+--------------+--------------+-----------+-----------+---------+-------+
+| nova.delete_keypair | 2.988     | 2.988        | 2.988        | 2.988        | 2.988     | 2.988     | 100.0%  | 1     |
+| nova.delete_server  | 45.9      | 45.9         | 45.9         | 45.9         | 45.9      | 45.9      | 100.0%  | 1     |
+| nova.boot_server    | 26.615    | 26.615       | 26.615       | 26.615       | 26.615    | 26.615    | 100.0%  | 1     |
+| nova.create_keypair | 6.252     | 6.252        | 6.252        | 6.252        | 6.252     | 6.252     | 100.0%  | 1     |
+| total               | 81.755    | 81.755       | 81.755       | 81.755       | 81.755    | 81.755    | 100.0%  | 1     |
++---------------------+-----------+--------------+--------------+--------------+-----------+-----------+---------+-------+
+
+Load duration: 81.7553539276
+Full duration: 447.08691597
+
+HINTS:
+* To plot HTML graphics with this data, run:
+	rally task report eb0cc3f9-0b79-4052-9f21-34167ca22058 --out output.html
+
+* To generate a JUnit report, run:
+	rally task report eb0cc3f9-0b79-4052-9f21-34167ca22058 --junit --out output.xml
+
+* To get raw JSON output of task results, run:
+	rally task results eb0cc3f9-0b79-4052-9f21-34167ca22058
+
+rally task report eb0cc3f9-0b79-4052-9f21-34167ca22058 --out
+existing.json
+----------------------------------------------------------------------------
+Task config is invalid: `Task config is invalid: `'public' is not of type 'array'
+
+Failed validating 'type' in schema['patternProperties']['.*']:
+    {'items': {'additionalProperties': False,
+               'properties': {'args': {'type': 'object'},
+                              'context': {'type': 'object'},
+                              'runner': {'properties': {'type': {'type': 'string'}},
+                                         'required': ['type'],
+                                         'type': 'object'},
+                              'sla': {'type': 'object'}},
+               'type': 'object'},
+     'type': 'array'}
+
+On instance['endpoint_type']:
+    'public'``
+--------------------------------------------------------------------------------
+ Preparing input task
+--------------------------------------------------------------------------------
+
+Input task is:
+{
+        "type": "ExistingCloud",
+        "auth_url": "https://192.168.58.11:5000/v2.0/",
+        "region_name": "RegionOne",
+        "endpoint_type": "public",
+        "admin": {
+            "username": "admin",
+            "password": "admin",
+            "tenant_name": "admin"
+        },
+        "https_insecure": true,
+        "https_cacert": "",
+    }
+
+
+Task syntax is correct :)
+
+can't find reportcmd

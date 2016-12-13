@@ -1,0 +1,9 @@
+[task_info]
+date = 20161201
+report_dir = .
+start_time = 2016-12-01 12:00:00
+end_time = 2016-12-01 12:10:00
+full_duration = 0h10m0s
+total = 12
+pass = 10
+fail = 2
