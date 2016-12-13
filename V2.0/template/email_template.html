@@ -1,0 +1,56 @@
+<!DOCTYPE html PUBLIC "-//W3C//DtdXHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Rally task results</title>
+<style>
+div {font-family: Tahoma, Geneva, sans-serif;color:#666}
+.header { text-align:left; background:#333; font-size:18px; padding:3px 20px; margin-bottom:20px; color:#fff;}
+.overview table{font-size:12px;background:#ccc;border-collapse:collapse;}
+.overview td{border:1px solid #fff;padding:0 5px}
+.detail table{font-size:12px;border-collapse:collapse;}
+.detail td{border:1px solid #ccc;padding:0 5px}
+.blue {font-style: italic;color: #03C;}
+.table_head {background-color: #69F;}
+.table_head table{font-size:12px;border-collapse:collapse;}
+.table_head td{border:1px solid #ccc;padding:0 5px}
+</style>
+</head>
+
+<body>
+<div class="header">
+<span>Rally task results</span></div>
+<div><h3> Task Overview</h3></div>
+<div class='overview'><table width="100%">
+ <tr>
+  <td height="20px"><strong>Server: </strong><span class="blue">{{server}}</span></td>
+  <td><strong>Slave:</strong> <span class="blue">{{slave}}</span></td>
+  <td><strong>Executor: </strong><span class="blue">{{executor}}</span></td>
+  <td><strong>Concurrency: </strong><span class="blue">{{concurrency}}</span></td>
+  <td><strong>Times: </strong><span class="blue">{{times}}</span></td>
+ </tr>
+ <tr>
+  <td height="20px"><strong>Start Time: </strong><span class="blue">{{start_time}}</span></td>
+  <td><strong>Duration: </strong><span class="blue">{{duration}}</span></td>
+  <td><strong>Total:</strong> <span class="blue">{{total}}</span></td>
+  <td><strong>Pass:</strong> <span class="blue">{{pass}}</span></td>
+  <td><strong>Fail:</strong> <span class="blue">{{fail}}</span></td>
+  </tr></table>
+</div>
+<div><h3> Detail Results</h3></div>
+<div class='detail'>
+<table width="100%" height="20px"><tr bgcolor="#ccc">
+<td height="20px"><strong>Case</strong></td>
+<td><strong>Concurrency</strong></td>
+<td><strong>Times</strong></td>
+<td><strong>Success_Rate</strong></td>
+<td><strong>Full_Duration(s)</strong></td>
+<td><strong>Error_Message</strong></td>
+</tr>
+{{case_details}}
+</table>
+</div>
+<p></p>
+<br/>
+</body>
+</html>

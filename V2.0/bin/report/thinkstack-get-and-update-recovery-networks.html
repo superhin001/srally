@@ -1,0 +1,864 @@
+<!doctype html>
+<html ng-app="App">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rally | Rally Task Report</title>
+  
+  
+  <link rel="stylesheet" href="http://cdn.bootcss.com/nvd3/1.1.15-beta/nv.d3.css">
+  <script type="text/javascript" src="http://cdn.bootcss.com/angular.js/1.3.3/angular.min.js"></script>
+  <script type="text/javascript" src="http://cdn.bootcss.com/d3/3.4.13/d3.min.js"></script>
+  <script type="text/javascript" src="http://cdn.bootcss.com/nvd3/1.1.15-beta/nv.d3.min.js"></script>
+  
+
+  <script type="text/javascript">
+    "use strict";
+    var widgetDirective = function($compile) {
+  var Chart = {
+    _render: function(node, data, chart, do_after){
+      nv.addGraph(function() {
+        d3.select(node)
+          .datum(data).transition().duration(0)
+          .call(chart);
+        if (typeof do_after === "function") {
+          do_after(node, chart)
+        }
+        nv.utils.windowResize(chart.update);
+      })
+    },
+    /* NOTE(amaretskiy): this is actually a result of
+       d3.scale.category20().range(), excluding red color (#d62728)
+       which is reserved for errors */
+    _colors: ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c",
+              "#98df8a", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b",
+              "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7",
+              "#bcbd22", "#dbdb8d", "#17becf", "#9edae5"],
+    _widgets: {
+      Pie: "pie",
+      StackedArea: "stack",
+      Lines: "lines",
+      Histogram: "histogram"
+    },
+    get_chart: function(widget) {
+      if (widget in this._widgets) {
+        var name = this._widgets[widget];
+        return Chart[name]
+      }
+      return function() { console.log("Error: unexpected widget:", widget) }
+    },
+    pie: function(node, data, opts, do_after) {
+      var chart = nv.models.pieChart()
+        .x(function(d) { return d.key })
+        .y(function(d) { return d.values })
+        .showLabels(true)
+        .labelType("percent")
+        .donut(true)
+        .donutRatio(0.25)
+        .donutLabelsOutside(true)
+        .color(function(d){
+          if (d.data && d.data.color) { return d.data.color }
+        });
+
+      var data_ = [], colors = [], colors_map = {errors: "#d62728"};
+      for (var i in data) {
+        var key = data[i][0];
+        if (! (key in colors_map)) {
+          if (! colors.length) { colors = Chart._colors.slice() }
+          colors_map[key] = colors.shift()
+        }
+        data_.push({key:key, values:data[i][1], color:colors_map[key]})
+      }
+      Chart._render(node, data_, chart)
+    },
+    stack: function(node, data, opts, do_after) {
+      var chart = nv.models.stackedAreaChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .showControls(opts.controls)
+        .clipEdge(true);
+      chart.xAxis
+        .tickFormat(d3.format(opts.xformat || "d"))
+        .axisLabel(opts.xname || "")
+        .showMaxMin(false);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var data_ = [];
+      for (var i in data) {
+        var d = {key:data[i][0], values:data[i][1]};
+        if (d.key === "failed_duration") {
+          d.color = "#d62728"
+        }
+        data_.push(d);
+      }
+      Chart._render(node, data_, chart, do_after);
+    },
+    lines: function(node, data, opts, do_after) {
+      var chart = nv.models.lineChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .clipEdge(true);
+      chart.xAxis
+        .tickFormat(d3.format(opts.xformat || "d"))
+        .axisLabel(opts.xname || "")
+        .showMaxMin(false);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var data_ = [];
+      for (var i in data) {
+        var d = {key:data[i][0], values:data[i][1]};
+        if (d.key === "failed_duration") {
+          d.color = "#d62728"
+        }
+        data_.push(d)
+      }
+      Chart._render(node, data_, chart, do_after)
+    },
+    histogram: function(node, data, opts) {
+      var chart = nv.models.multiBarChart()
+        .reduceXTicks(true)
+        .showControls(false)
+        .transitionDuration(0)
+        .groupSpacing(0.05);
+      chart
+        .legend.radioButtonMode(true);
+      chart.xAxis
+        .axisLabel("Duration (seconds)")
+        .tickFormat(d3.format(",.2f"));
+      chart.yAxis
+        .axisLabel("Iterations (frequency)")
+        .tickFormat(d3.format("d"));
+      Chart._render(node, data, chart)
+    }
+  };
+
+  return {
+    restrict: "A",
+    scope: { data: "=" },
+    link: function(scope, element, attrs) {
+      scope.$watch("data", function(data) {
+        if (! data) { return console.log("Chart has no data to render!") }
+        if (attrs.widget === "Table") {
+          var ng_class = attrs.lastrowClass ? " ng-class='{"+attrs.lastrowClass+":$last}'" : "";
+          var template = "<table class='striped'><thead>" +
+            "<tr><th ng-repeat='i in data.cols track by $index'>{{i}}<tr>" +
+            "</thead><tbody>" +
+            "<tr" + ng_class + " ng-repeat='row in data.rows track by $index'>" +
+            "<td ng-repeat='i in row track by $index'>{{i}}" +
+            "<tr>" +
+            "</tbody></table>";
+          var el = element.empty().append($compile(template)(scope)).children()[0]
+        } else {
+
+          var el_chart = element.addClass("chart").css({display:"block"});
+          var el = el_chart.html("<svg></svg>").children()[0];
+
+          var do_after = null;
+
+          if (attrs.widget in {StackedArea:0, Lines:0}) {
+
+            /* Hide widget if not enough data */
+            if ((! data.length) || (data[0].length < 1) || (data[0][1].length < 2)) {
+              return element.empty().css({display:"none"})
+            }
+
+            /* NOTE(amaretskiy): Dirty fix for changing chart width in case
+               if there are too long Y values that overlaps chart box. */
+            var do_after = function(node, chart){
+              var g_box = angular.element(el_chart[0].querySelector(".nv-y.nv-axis"));
+
+              if (g_box && g_box[0] && g_box[0].getBBox) {
+
+                try {
+                  // 30 is padding aroung graphs
+                  var width = g_box[0].getBBox().width + 30;
+                } catch (err) {
+                  // This happens sometimes, just skip silently
+                  return
+                }
+
+                // 890 is chart width (set by CSS)
+                if (typeof width === "number" && width > 890) {
+                  width = (890 * 2) - width;
+                  if (width > 0) {
+                    angular.element(node).css({width:width+"px"});
+                    chart.update()
+                  }
+                }
+              }
+            }
+          }
+          else if (attrs.widget === "Pie") {
+            if (! data.length) {
+              return element.empty().css({display:"none"})
+            }
+          }
+
+          var options = {
+            xname: attrs.nameX || "",
+            xformat: attrs.formatX || "d",
+            yformat: attrs.formatY || ",.3f",
+            controls: attrs.controls === "true",
+            guide: attrs.guide === "true"
+          };
+          Chart.get_chart(attrs.widget)(el, data, options, do_after);
+        }
+
+        if (attrs.nameY) {
+          /* NOTE(amaretskiy): Dirty fix for displaying Y-axis label correctly.
+             I believe sometimes NVD3 will allow doing this in normal way */
+          var label_y = angular.element("<div>").addClass("chart-label-y").text(attrs.nameY);
+          angular.element(el).parent().prepend(label_y)
+        }
+
+        if (attrs.description) {
+          var desc_el = angular.element("<div>").addClass(attrs.descriptionClass || "h3").text(attrs.description);
+          angular.element(el).parent().prepend(desc_el)
+        }
+
+        if (attrs.title) {
+          var title_el = angular.element("<div>").addClass(attrs.titleClass || "h2").text(attrs.title);
+          angular.element(el).parent().prepend(title_el)
+        }
+
+        angular.element(el).parent().append(angular.element("<div style='clear:both'>"))
+      });
+    }
+  }
+};
+
+    var controllerFunction = function($scope, $location) {
+        $scope.source = "{\n  \"ThinkStack_NeutronNetworks.get_and_update_and_recovery_networks\": [\n    {\n      \"args\": {\n        \"network_update_args\": {\n          \"admin_state_up\": false, \n          \"name\": \"_updated\"\n        }\n      }, \n      \"context\": {\n        \"quotas\": {\n          \"neutron\": {\n            \"network\": -1\n          }\n        }, \n        \"users\": {\n          \"define_flag\": true, \n          \"define_tenant_id\": \"b851fb5ae7974c038ff35f14e365d515\", \n          \"define_tenant_name\": \"enhance\", \n          \"define_user_id\": \"a609bbc8419741b5924c1fcbf4cc2a47\", \n          \"define_user_name\": \"enhance\", \n          \"define_user_password\": \"123456\", \n          \"project_domain\": \"default\", \n          \"resource_management_workers\": 20, \n          \"tenants\": 1, \n          \"user_choice_method\": \"random\", \n          \"user_domain\": \"default\", \n          \"users_per_tenant\": 1\n        }\n      }, \n      \"runner\": {\n        \"concurrency\": 10, \n        \"times\": 100, \n        \"type\": \"constant\"\n      }\n    }\n  ]\n}";
+        $scope.scenarios = [{"load_profile": [["parallel iterations", [[0.0, 0], [0.41133926568031315, 9.772776846627739], [0.8226785313606263, 10], [1.2340177970409394, 10], [1.6453570627212526, 10], [2.0566963284015656, 10], [2.468035594081879, 10], [2.879374859762192, 9.999898282247548], [3.290714125442505, 9.933140487726646], [3.7020533911228184, 10], [4.113392656803131, 9.974714857144685], [4.524731922483444, 10], [4.936071188163758, 10], [5.347410453844071, 10], [5.758749719524384, 10], [6.170088985204697, 9.975603987190993], [6.58142825088501, 9.967134067134497], [6.992767516565324, 10], [7.404106782245637, 10], [7.81544604792595, 10], [8.226785313606262, 10], [8.638124579286576, 10], [9.049463844966889, 9.955629860381507], [9.460803110647202, 9.964012838125788], [9.872142376327515, 9.968014502949577], [10.283481642007828, 10], [10.694820907688142, 10], [11.106160173368455, 10], [11.517499439048768, 10], [11.928838704729081, 9.989115981740852], [12.340177970409394, 9.96811593564717], [12.751517236089708, 9.970297608068483], [13.16285650177002, 9.979260780842978], [13.574195767450334, 10], [13.985535033130647, 10], [14.39687429881096, 10], [14.808213564491274, 10], [15.219552830171587, 9.958758044775195], [15.6308920958519, 9.968884505687194], [16.042231361532213, 10], [16.453570627212525, 10], [16.86490989289284, 10], [17.27624915857315, 10], [17.687588424253466, 10], [18.098927689933777, 10], [18.510266955614092, 9.96134834606396], [18.921606221294404, 9.96803073218118], [19.33294548697472, 10], [19.74428475265503, 10], [20.155624018335345, 10], [20.566963284015657, 10], [20.97830254969597, 10], [21.389641815376283, 9.94993166123857], [21.800981081056598, 9.989189013283122], [22.21232034673691, 9.987798515903004], [22.623659612417224, 9.99052386758341], [23.034998878097536, 10], [23.44633814377785, 10], [23.857677409458162, 10], [24.269016675138477, 9.988785600954419], [24.68035594081879, 9.96721985021587], [25.091695206499104, 9.978134588092027], [25.503034472179415, 9.989252191363326], [25.91437373785973, 9.988957746732614], [26.32571300354004, 10], [26.737052269220353, 10], [27.148391534900668, 10], [27.55973080058098, 9.937094918646952], [27.971070066261294, 10], [28.382409331941606, 9.965598665900671], [28.79374859762192, 10], [29.205087863302232, 9.987985731681984], [29.616427128982547, 10], [30.02776639466286, 10], [30.439105660343174, 9.978181536940625], [30.850444926023485, 9.97970766432778], [31.2617841917038, 9.988585633636314], [31.67312345738411, 9.978244135405406], [32.084462723064426, 9.988998899427067], [32.49580198874474, 10], [32.90714125442505, 10], [33.31848052010537, 10], [33.72981978578568, 9.94537124715491], [34.14115905146599, 9.98862272902285], [34.5524983171463, 9.978370491565832], [34.96383758282662, 9.989701393309815], [35.37517684850693, 9.986402801984159], [35.78651611418724, 10], [36.197855379867555, 10], [36.60919464554787, 10], [37.020533911228185, 8.648342108634743], [37.431873176908496, 7.769058965336484], [37.84321244258881, 5.558075870330926], [38.254551708269126, 4.0153683167828405], [38.66589097394944, 3.094358347592096], [39.07723023962975, 3], [39.48856950531006, 3], [39.89990877099037, 2.676561871461236], [40.31124803667069, 1.0050374620298124], [40.722587302351, 0.03921568627449609], [41.13392656803131, 0]]]], "errors": [{"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 0}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 1}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 2}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 3}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 4}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 5}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 6}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 7}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 8}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 9}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 10}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 11}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 12}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 13}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 14}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 15}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 16}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 17}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 18}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 19}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 20}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 21}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 22}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 23}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 24}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 25}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 26}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 27}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 28}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 29}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 30}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 31}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 32}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 33}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 34}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 35}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 36}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 37}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 38}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 39}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 40}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 41}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 42}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 43}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 44}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 45}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 46}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 47}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 48}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 49}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 50}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 51}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 52}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 53}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 54}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 55}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 56}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 57}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 58}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 59}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 60}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 61}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 62}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 63}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 64}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 65}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 66}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 67}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 68}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 69}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 70}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 71}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 72}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 73}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 74}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 75}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 76}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 77}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 78}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 79}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 80}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 81}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 82}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 83}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 84}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 85}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 86}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 87}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 88}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 89}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 90}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 91}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 92}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 93}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 94}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 95}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 96}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 97}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 98}, {"type": "KeyError", "message": "'name'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 74, in get_and_update_and_recovery_networks\n    self._update_recovery_network(network, network_update_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 167, in _update_recovery_network\n    network_recovery_args[k]=network[k]\nKeyError: 'name'\n", "iteration": 99}], "name": "get_and_update_and_recovery_networks", "runner": "constant", "iterations_count": 100, "output_errors": [], "pos": "0", "load_duration": 40.32737898826599, "sla_success": true, "met": "get_and_update_and_recovery_networks", "atomic": {"pie": [["neutron.update_recovery_network", 1.1494159698486328e-05], ["neutron.get_network", 3.8155219984054565]], "iter": [["neutron.update_recovery_network", [[1, 1.0013580322265625e-05], [2, 1.0013580322265625e-05], [3, 9.059906005859375e-06], [4, 9.059906005859375e-06], [5, 5.793571472167969e-05], [6, 9.059906005859375e-06], [7, 1.0013580322265625e-05], [8, 8.821487426757812e-06], [9, 1.0013580322265625e-05], [10, 1.3828277587890625e-05], [11, 1.0013580322265625e-05], [12, 8.821487426757812e-06], [13, 9.059906005859375e-06], [14, 1.0013580322265625e-05], [15, 8.821487426757812e-06], [16, 9.059906005859375e-06], [17, 9.059906005859375e-06], [18, 4.1961669921875e-05], [19, 1.0967254638671875e-05], [20, 6.103515625e-05], [21, 9.059906005859375e-06], [22, 1.0013580322265625e-05], [23, 1.0013580322265625e-05], [24, 1.0967254638671875e-05], [25, 9.059906005859375e-06], [26, 6.9141387939453125e-06], [27, 1.3828277587890625e-05], [28, 4.100799560546875e-05], [29, 7.867813110351562e-06], [30, 2.8848648071289062e-05], [31, 8.106231689453125e-06], [32, 6.794929504394531e-05], [33, 8.106231689453125e-06], [34, 9.059906005859375e-06], [35, 7.867813110351562e-06], [36, 7.152557373046875e-06], [37, 7.152557373046875e-06], [38, 8.106231689453125e-06], [39, 7.867813110351562e-06], [40, 6.9141387939453125e-06], [41, 6.9141387939453125e-06], [42, 9.059906005859375e-06], [43, 3.0040740966796875e-05], [44, 9.059906005859375e-06], [45, 1.0013580322265625e-05], [46, 7.867813110351562e-06], [47, 7.867813110351562e-06], [48, 6.9141387939453125e-06], [49, 7.867813110351562e-06], [50, 8.106231689453125e-06], [51, 9.059906005859375e-06], [52, 8.106231689453125e-06], [53, 9.059906005859375e-06], [54, 7.867813110351562e-06], [55, 1.1920928955078125e-05], [56, 9.059906005859375e-06], [57, 7.152557373046875e-06], [58, 1.4066696166992188e-05], [59, 1.0013580322265625e-05], [60, 7.867813110351562e-06], [61, 6.9141387939453125e-06], [62, 8.106231689453125e-06], [63, 1.1920928955078125e-05], [64, 6.9141387939453125e-06], [65, 1.3113021850585938e-05], [66, 7.867813110351562e-06], [67, 7.152557373046875e-06], [68, 9.059906005859375e-06], [69, 8.106231689453125e-06], [70, 7.152557373046875e-06], [71, 8.106231689453125e-06], [72, 1.0013580322265625e-05], [73, 8.106231689453125e-06], [74, 8.106231689453125e-06], [75, 7.867813110351562e-06], [76, 9.059906005859375e-06], [77, 6.9141387939453125e-06], [78, 8.106231689453125e-06], [79, 6.9141387939453125e-06], [80, 6.9141387939453125e-06], [81, 8.106231689453125e-06], [82, 8.106231689453125e-06], [83, 9.059906005859375e-06], [84, 7.867813110351562e-06], [85, 7.867813110351562e-06], [86, 9.059906005859375e-06], [87, 8.106231689453125e-06], [88, 9.059906005859375e-06], [89, 6.9141387939453125e-06], [90, 9.059906005859375e-06], [91, 8.106231689453125e-06], [92, 1.3113021850585938e-05], [93, 8.106231689453125e-06], [94, 7.867813110351562e-06], [95, 8.106231689453125e-06], [96, 9.059906005859375e-06], [97, 6.9141387939453125e-06], [98, 7.867813110351562e-06], [99, 1.2159347534179688e-05], [100, 8.106231689453125e-06]]], ["neutron.get_network", [[1, 3.772629976272583], [2, 8.788010120391846], [3, 3.1242799758911133], [4, 8.786934852600098], [5, 2.8703489303588867], [6, 6.091993093490601], [7, 3.1175549030303955], [8, 3.1847379207611084], [9, 8.779428005218506], [10, 3.7512950897216797], [11, 2.9902918338775635], [12, 3.0532400608062744], [13, 3.2015838623046875], [14, 3.2554290294647217], [15, 5.805371999740601], [16, 5.925236940383911], [17, 3.07515287399292], [18, 3.240760087966919], [19, 3.158975839614868], [20, 3.1309659481048584], [21, 2.8419339656829834], [22, 6.063476800918579], [23, 3.065732955932617], [24, 3.2358200550079346], [25, 3.062570810317993], [26, 2.850106954574585], [27, 3.0473148822784424], [28, 3.048630952835083], [29, 3.2050459384918213], [30, 3.205859899520874], [31, 3.11740779876709], [32, 3.063448905944824], [33, 3.0573348999023438], [34, 3.4303340911865234], [35, 2.768646001815796], [36, 3.0468790531158447], [37, 5.793412923812866], [38, 2.9306938648223877], [39, 5.907027959823608], [40, 5.978163957595825], [41, 3.244637966156006], [42, 3.8581011295318604], [43, 3.1641058921813965], [44, 3.0082290172576904], [45, 5.910077810287476], [46, 5.889624834060669], [47, 6.0637288093566895], [48, 4.375355005264282], [49, 3.0308990478515625], [50, 3.1953980922698975], [51, 3.1001250743865967], [52, 3.286412000656128], [53, 6.039502859115601], [54, 6.172245979309082], [55, 3.143319845199585], [56, 2.921535015106201], [57, 3.0408101081848145], [58, 6.185938835144043], [59, 6.184882879257202], [60, 2.86752986907959], [61, 3.2245841026306152], [62, 3.2354049682617188], [63, 3.090613842010498], [64, 3.104954957962036], [65, 3.0044379234313965], [66, 2.9070611000061035], [67, 3.3055520057678223], [68, 3.0455808639526367], [69, 3.0970211029052734], [70, 3.274502992630005], [71, 6.291595935821533], [72, 6.255545139312744], [73, 3.1844050884246826], [74, 3.1661951541900635], [75, 2.8204410076141357], [76, 2.7592010498046875], [77, 3.1861510276794434], [78, 3.165910005569458], [79, 3.0828521251678467], [80, 2.9675638675689697], [81, 3.267359972000122], [82, 3.067525863647461], [83, 3.509713888168335], [84, 3.0790340900421143], [85, 3.4039368629455566], [86, 2.9998350143432617], [87, 3.1132960319519043], [88, 3.3335418701171875], [89, 3.227717876434326], [90, 3.143746852874756], [91, 3.1260669231414795], [92, 3.0497210025787354], [93, 6.041362047195435], [94, 3.2335920333862305], [95, 3.270426034927368], [96, 2.9613490104675293], [97, 3.211292028427124], [98, 2.978499174118042], [99, 3.217833995819092], [100, 3.6402509212493896]]], ["failed_duration", [[1, 0.0001270771026611328], [2, 0.00011992454528808594], [3, 0.00010609626770019531], [4, 0.00010895729064941406], [5, 0.00011110305786132812], [6, 0.00014066696166992188], [7, 0.00012302398681640625], [8, 0.00012636184692382812], [9, 0.00018787384033203125], [10, 0.0001220703125], [11, 5.626678466796875e-05], [12, 4.220008850097656e-05], [13, 4.601478576660156e-05], [14, 4.9114227294921875e-05], [15, 6.413459777832031e-05], [16, 5.602836608886719e-05], [17, 5.412101745605469e-05], [18, 6.389617919921875e-05], [19, 5.412101745605469e-05], [20, 4.9114227294921875e-05], [21, 4.887580871582031e-05], [22, 5.0067901611328125e-05], [23, 5.3882598876953125e-05], [24, 5.602836608886719e-05], [25, 6.508827209472656e-05], [26, 5.91278076171875e-05], [27, 6.818771362304688e-05], [28, 4.9114227294921875e-05], [29, 4.3392181396484375e-05], [30, 5.435943603515625e-05], [31, 8.0108642578125e-05], [32, 6.723403930664062e-05], [33, 5.1975250244140625e-05], [34, 0.00011777877807617188], [35, 6.29425048828125e-05], [36, 6.985664367675781e-05], [37, 4.601478576660156e-05], [38, 5.0067901611328125e-05], [39, 5.507469177246094e-05], [40, 5.316734313964844e-05], [41, 5.221366882324219e-05], [42, 6.365776062011719e-05], [43, 6.29425048828125e-05], [44, 6.580352783203125e-05], [45, 6.318092346191406e-05], [46, 6.031990051269531e-05], [47, 5.245208740234375e-05], [48, 5.125999450683594e-05], [49, 4.410743713378906e-05], [50, 5.173683166503906e-05], [51, 5.5789947509765625e-05], [52, 5.3882598876953125e-05], [53, 5.1021575927734375e-05], [54, 5.626678466796875e-05], [55, 5.817413330078125e-05], [56, 4.792213439941406e-05], [57, 5.3882598876953125e-05], [58, 4.887580871582031e-05], [59, 6.413459777832031e-05], [60, 6.127357482910156e-05], [61, 5.0067901611328125e-05], [62, 4.887580871582031e-05], [63, 4.9114227294921875e-05], [64, 6.127357482910156e-05], [65, 5.1975250244140625e-05], [66, 5.507469177246094e-05], [67, 4.982948303222656e-05], [68, 4.9114227294921875e-05], [69, 4.673004150390625e-05], [70, 4.57763671875e-05], [71, 5.698204040527344e-05], [72, 5.4836273193359375e-05], [73, 5.364418029785156e-05], [74, 5.269050598144531e-05], [75, 5.412101745605469e-05], [76, 5.1021575927734375e-05], [77, 5.1021575927734375e-05], [78, 0.00012993812561035156], [79, 5.316734313964844e-05], [80, 4.7206878662109375e-05], [81, 4.887580871582031e-05], [82, 4.9114227294921875e-05], [83, 4.9114227294921875e-05], [84, 6.103515625e-05], [85, 4.506111145019531e-05], [86, 4.673004150390625e-05], [87, 7.987022399902344e-05], [88, 9.989738464355469e-05], [89, 5.7220458984375e-05], [90, 6.103515625e-05], [91, 6.794929504394531e-05], [92, 5.888938903808594e-05], [93, 4.982948303222656e-05], [94, 5.030632019042969e-05], [95, 4.982948303222656e-05], [96, 4.696846008300781e-05], [97, 5.1021575927734375e-05], [98, 4.601478576660156e-05], [99, 4.673004150390625e-05], [100, 5.1021575927734375e-05]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 88, "x": 1.3017654418945313e-05}, {"y": 5, "x": 1.9121170043945313e-05}, {"y": 0, "x": 2.5224685668945315e-05}, {"y": 2, "x": 3.1328201293945314e-05}, {"y": 0, "x": 3.743171691894531e-05}, {"y": 2, "x": 4.353523254394532e-05}, {"y": 0, "x": 4.9638748168945317e-05}, {"y": 0, "x": 5.5742263793945315e-05}, {"y": 2, "x": 6.184577941894531e-05}, {"y": 1, "x": 6.794929504394531e-05}], "key": "neutron.update_recovery_network", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 72, "x": 3.3620819568634035}, {"y": 7, "x": 3.964962863922119}, {"y": 1, "x": 4.567843770980835}, {"y": 0, "x": 5.170724678039551}, {"y": 0, "x": 5.773605585098267}, {"y": 17, "x": 6.376486492156982}, {"y": 0, "x": 6.979367399215698}, {"y": 0, "x": 7.582248306274414}, {"y": 0, "x": 8.18512921333313}, {"y": 3, "x": 8.788010120391846}], "key": "neutron.get_network", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 93, "x": 1.4543533325195312e-05}, {"y": 0, "x": 2.2172927856445312e-05}, {"y": 1, "x": 2.9802322387695312e-05}, {"y": 1, "x": 3.743171691894531e-05}, {"y": 2, "x": 4.506111145019531e-05}, {"y": 0, "x": 5.269050598144531e-05}, {"y": 1, "x": 6.031990051269531e-05}, {"y": 2, "x": 6.794929504394531e-05}], "key": "neutron.update_recovery_network", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 75, "x": 3.5128021836280823}, {"y": 4, "x": 4.266403317451477}, {"y": 1, "x": 5.020004451274872}, {"y": 0, "x": 5.773605585098267}, {"y": 17, "x": 6.527206718921661}, {"y": 0, "x": 7.280807852745056}, {"y": 0, "x": 8.034408986568451}, {"y": 3, "x": 8.788010120391846}], "key": "neutron.get_network", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 88, "x": 1.3017654418945313e-05}, {"y": 5, "x": 1.9121170043945313e-05}, {"y": 0, "x": 2.5224685668945315e-05}, {"y": 2, "x": 3.1328201293945314e-05}, {"y": 0, "x": 3.743171691894531e-05}, {"y": 2, "x": 4.353523254394532e-05}, {"y": 0, "x": 4.9638748168945317e-05}, {"y": 0, "x": 5.5742263793945315e-05}, {"y": 2, "x": 6.184577941894531e-05}, {"y": 1, "x": 6.794929504394531e-05}], "key": "neutron.update_recovery_network", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 72, "x": 3.3620819568634035}, {"y": 7, "x": 3.964962863922119}, {"y": 1, "x": 4.567843770980835}, {"y": 0, "x": 5.170724678039551}, {"y": 0, "x": 5.773605585098267}, {"y": 17, "x": 6.376486492156982}, {"y": 0, "x": 6.979367399215698}, {"y": 0, "x": 7.582248306274414}, {"y": 0, "x": 8.18512921333313}, {"y": 3, "x": 8.788010120391846}], "key": "neutron.get_network", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 0], ["errors", 100]], "iter": [["duration", [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0], [14, 0], [15, 0], [16, 0], [17, 0], [18, 0], [19, 0], [20, 0], [21, 0], [22, 0], [23, 0], [24, 0], [25, 0], [26, 0], [27, 0], [28, 0], [29, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0], [36, 0], [37, 0], [38, 0], [39, 0], [40, 0], [41, 0], [42, 0], [43, 0], [44, 0], [45, 0], [46, 0], [47, 0], [48, 0], [49, 0], [50, 0], [51, 0], [52, 0], [53, 0], [54, 0], [55, 0], [56, 0], [57, 0], [58, 0], [59, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0], [67, 0], [68, 0], [69, 0], [70, 0], [71, 0], [72, 0], [73, 0], [74, 0], [75, 0], [76, 0], [77, 0], [78, 0], [79, 0], [80, 0], [81, 0], [82, 0], [83, 0], [84, 0], [85, 0], [86, 0], [87, 0], [88, 0], [89, 0], [90, 0], [91, 0], [92, 0], [93, 0], [94, 0], [95, 0], [96, 0], [97, 0], [98, 0], [99, 0], [100, 0]]], ["idle_duration", [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0], [14, 0], [15, 0], [16, 0], [17, 0], [18, 0], [19, 0], [20, 0], [21, 0], [22, 0], [23, 0], [24, 0], [25, 0], [26, 0], [27, 0], [28, 0], [29, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0], [36, 0], [37, 0], [38, 0], [39, 0], [40, 0], [41, 0], [42, 0], [43, 0], [44, 0], [45, 0], [46, 0], [47, 0], [48, 0], [49, 0], [50, 0], [51, 0], [52, 0], [53, 0], [54, 0], [55, 0], [56, 0], [57, 0], [58, 0], [59, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0], [67, 0], [68, 0], [69, 0], [70, 0], [71, 0], [72, 0], [73, 0], [74, 0], [75, 0], [76, 0], [77, 0], [78, 0], [79, 0], [80, 0], [81, 0], [82, 0], [83, 0], [84, 0], [85, 0], [86, 0], [87, 0], [88, 0], [89, 0], [90, 0], [91, 0], [92, 0], [93, 0], [94, 0], [95, 0], [96, 0], [97, 0], [98, 0], [99, 0], [100, 0]]], ["failed_duration", [[1, 3.7727670669555664], [2, 8.788140058517456], [3, 3.1243951320648193], [4, 8.787052869796753], [5, 2.8705179691314697], [6, 6.092142820358276], [7, 3.117687940597534], [8, 3.184873104095459], [9, 8.77962589263916], [10, 3.7514309883117676], [11, 2.9903581142425537], [12, 3.053291082382202], [13, 3.20163893699646], [14, 3.255488157272339], [15, 5.805444955825806], [16, 5.925302028656006], [17, 3.075216054916382], [18, 3.24086594581604], [19, 3.159040927886963], [20, 3.1310760974884033], [21, 2.841991901397705], [22, 6.063536882400513], [23, 3.0657968521118164], [24, 3.235887050628662], [25, 3.0626449584960938], [26, 2.850172996520996], [27, 3.0473968982696533], [28, 3.0487210750579834], [29, 3.205097198486328], [30, 3.2059431076049805], [31, 3.1174960136413574], [32, 3.063584089279175], [33, 3.0573949813842773], [34, 3.4304609298706055], [35, 2.768716812133789], [36, 3.0469560623168945], [37, 5.793466091156006], [38, 2.9307520389556885], [39, 5.907090902328491], [40, 5.978224039077759], [41, 3.244697093963623], [42, 3.8581738471984863], [43, 3.164198875427246], [44, 3.0083038806915283], [45, 5.91015100479126], [46, 5.889693021774292], [47, 6.063789129257202], [48, 4.375413179397583], [49, 3.0309510231018066], [50, 3.195457935333252], [51, 3.1001899242401123], [52, 3.2864739894866943], [53, 6.039562940597534], [54, 6.17231011390686], [55, 3.143389940261841], [56, 2.9215919971466064], [57, 3.0408711433410645], [58, 6.186001777648926], [59, 6.184957027435303], [60, 2.8675990104675293], [61, 3.2246410846710205], [62, 3.235461950302124], [63, 3.090674877166748], [64, 3.105023145675659], [65, 3.004503011703491], [66, 2.9071240425109863], [67, 3.3056089878082275], [68, 3.0456390380859375], [69, 3.097075939178467], [70, 3.2745559215545654], [71, 6.291661024093628], [72, 6.25560998916626], [73, 3.18446683883667], [74, 3.1662559509277344], [75, 2.820502996444702], [76, 2.759261131286621], [77, 3.186208963394165], [78, 3.166048049926758], [79, 3.0829122066497803], [80, 2.967617988586426], [81, 3.2674169540405273], [82, 3.0675830841064453], [83, 3.5097720623016357], [84, 3.0791029930114746], [85, 3.403989791870117], [86, 2.9998908042907715], [87, 3.1133840084075928], [88, 3.333650827407837], [89, 3.2277820110321045], [90, 3.1438169479370117], [91, 3.126142978668213], [92, 3.049793004989624], [93, 6.041419982910156], [94, 3.2336502075195312], [95, 3.27048397064209], [96, 2.961405038833618], [97, 3.2113499641418457], [98, 2.978553056716919], [99, 3.21789288520813], [100, 3.640310049057007]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "additive_output": [], "table": {"rows": [["neutron.update_recovery_network", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100], ["neutron.get_network", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100], ["total", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "full_duration": 43.14727783203125, "config": "{\n  \"ThinkStack_NeutronNetworks.get_and_update_and_recovery_networks\": [\n    {\n      \"runner\": {\n        \"type\": \"constant\", \n        \"concurrency\": 10, \n        \"times\": 100\n      }, \n      \"args\": {\n        \"network_update_args\": {\n          \"name\": \"_updated\", \n          \"admin_state_up\": false\n        }\n      }, \n      \"context\": {\n        \"users\": {\n          \"define_flag\": true, \n          \"define_user_id\": \"a609bbc8419741b5924c1fcbf4cc2a47\", \n          \"users_per_tenant\": 1, \n          \"define_tenant_id\": \"b851fb5ae7974c038ff35f14e365d515\", \n          \"define_user_name\": \"enhance\", \n          \"project_domain\": \"default\", \n          \"define_tenant_name\": \"enhance\", \n          \"define_user_password\": \"123456\", \n          \"user_choice_method\": \"random\", \n          \"user_domain\": \"default\", \n          \"tenants\": 1, \n          \"resource_management_workers\": 20\n        }, \n        \"quotas\": {\n          \"neutron\": {\n            \"network\": -1\n          }\n        }\n      }\n    }\n  ]\n}", "sla": [], "complete_output": [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []], "cls": "ThinkStack_NeutronNetworks"}];
+
+      $scope.location = {
+        /* #/path/hash/sub/div */
+        normalize: function(str) {
+          /* Remove unwanted characters from string */
+          if (typeof str !== "string") { return "" }
+          return str.replace(/[^\w\-\.]/g, "")
+        },
+        uri: function(obj) {
+          /* Getter/Setter */
+          if (! obj) {
+            var uri = {path: "", hash: "", sub: "", div: ""};
+            var arr = ["div", "sub", "hash", "path"];
+            angular.forEach($location.url().split("/"), function(value){
+              var v = $scope.location.normalize(value);
+              if (v) { var k = arr.pop(); if (k) { this[k] = v }}
+            }, uri);
+            return uri
+          }
+          var arr = [obj.path, obj.hash, obj.sub, obj.div], res = [];
+          for (var i in arr) { if (! arr[i]) { break }; res.push(arr[i]) }
+          return $location.url("/" + res.join("/"))
+        },
+        path: function(path, hash) {
+          /* Getter/Setter */
+          if (path === "") { return this.uri({}) }
+          path = this.normalize(path);
+          var uri = this.uri();
+          if (! path) { return uri.path }
+          uri.path = path;
+          var _hash = this.normalize(hash);
+          if (_hash || hash === "") { uri.hash = _hash }
+          return this.uri(uri)
+        },
+        hash: function(hash) {
+          /* Getter/Setter */
+          if (hash) { this.uri({path:this.uri().path, hash:hash}) }
+          return this.uri().hash
+        }
+      }
+
+      /* Dispatch */
+
+      $scope.route = function(uri) {
+        if (! $scope.scenarios_map) { return }
+        if (uri.path in $scope.scenarios_map) {
+          $scope.view = {is_scenario:true};
+          $scope.scenario = $scope.scenarios_map[uri.path];
+          $scope.nav_idx = $scope.nav_map[uri.path];
+          if ($scope.scenario.iterations.histogram.views.length) {
+            $scope.mainHistogram = $scope.scenario.iterations.histogram.views[0]
+          }
+          if ($scope.scenario.atomic.histogram.views.length) {
+            $scope.atomicHistogram = $scope.scenario.atomic.histogram.views[0]
+          }
+          $scope.outputIteration = 0;
+          $scope.showTab(uri);
+        } else {
+          $scope.scenario = null;
+          if (uri.path === "source") {
+            $scope.view = {is_source:true}
+          } else {
+            $scope.view = {is_main:true}
+          }
+        }
+      }
+
+      $scope.$on("$locationChangeSuccess", function (event, newUrl, oldUrl) {
+        $scope.route($scope.location.uri())
+      });
+
+      $scope.showNav = function(nav_idx) { $scope.nav_idx = nav_idx }
+
+      /* Tabs */
+
+      $scope.tabs = [
+        {
+          id: "overview",
+          name: "Overview",
+          visible: function(){ return !! $scope.scenario.iterations.pie.length }
+        },{
+          id: "details",
+          name: "Details",
+          visible: function(){ return !! $scope.scenario.atomic.pie.length }
+        },{
+          id: "output",
+          name: "Scenario Data",
+          visible: function(){ return $scope.scenario.output.length }
+        },{
+          id: "failures",
+          name: "Failures",
+          visible: function(){ return !! $scope.scenario.errors.length }
+        },{
+          id: "task",
+          name: "Input task",
+          visible: function(){ return !! $scope.scenario.config }
+        }
+      ];
+      $scope.tabs_map = {};
+      angular.forEach($scope.tabs,
+                      function(tab){ this[tab.id] = tab }, $scope.tabs_map);
+
+      $scope.showTab = function(uri) {
+        $scope.tab = uri.hash in $scope.tabs_map ? uri.hash : "overview";
+        if (! $scope.scenario.output) {
+          var has_additive = !! $scope.scenario.additive_output.length;
+          var has_complete = !! ($scope.scenario.complete_output.length
+                                 && $scope.scenario.complete_output[0].length);
+          $scope.scenario.output = {
+            has_additive: has_additive,
+            has_complete: has_complete,
+            length: has_additive + has_complete,
+            active: has_additive ? "additive" : (has_complete ? "complete" : "")
+          }
+        }
+        if (uri.hash === "output") {
+          if (uri.sub && $scope.scenario.output["has_" + uri.sub]) {
+            $scope.scenario.output.active = uri.sub
+          }
+        }
+      }
+
+      for (var i in $scope.tabs) {
+        if ($scope.tabs[i].id === $scope.location.hash()) {
+          $scope.tab = $scope.tabs[i].id
+        }
+        $scope.tabs[i].isVisible = function() {
+          if ($scope.scenario) {
+            if (this.visible()) { return true }
+            /* If tab should be hidden but is selected - show another one */
+            if (this.id === $scope.location.hash()) {
+              for (var i in $scope.tabs) {
+                var tab = $scope.tabs[i];
+                if (tab.id != this.id && tab.visible()) {
+                  $scope.tab = tab.id;
+                  return false
+                }
+              }
+            }
+          }
+          return false
+        }
+      }
+
+      /* Other helpers */
+
+      $scope.showError = function(message) {
+          return (function (e) {
+            e.style.display = "block";
+            e.textContent = message
+          })(document.getElementById("page-error"))
+      }
+
+      $scope.compact_atomics = function() {
+        return ($scope.scenario && $scope.scenario.atomic.iter.length < 9)
+      }
+
+      /* Initialization */
+
+      angular.element(document).ready(function(){
+        if (! $scope.scenarios.length) {
+          return $scope.showError("No data...")
+        }
+
+        /* Compose data mapping */
+
+        $scope.nav = [];
+        $scope.nav_map = {};
+        $scope.scenarios_map = {};
+        var met = [], itr = 0, cls_idx = 0;
+        var prev_cls, prev_met;
+
+        for (var idx in $scope.scenarios) {
+          var sc = $scope.scenarios[idx];
+          if (! prev_cls) {
+            prev_cls = sc.cls
+          }
+          else if (prev_cls !== sc.cls) {
+            $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx});
+            prev_cls = sc.cls;
+            met = [];
+            itr = 1;
+            cls_idx += 1
+          }
+
+          if (prev_met !== sc.met) { itr = 1 };
+          sc.ref = $scope.location.normalize(sc.cls+"."+sc.met+(itr > 1 ? "-"+itr : ""));
+          $scope.scenarios_map[sc.ref] = sc;
+          $scope.nav_map[sc.ref] = cls_idx;
+          met.push({name:sc.name, itr:itr, idx:idx, ref:sc.ref});
+          prev_met = sc.met;
+          itr += 1;
+        }
+
+        if (met.length) {
+          $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx})
+        }
+
+        /* Start */
+
+        var uri = $scope.location.uri();
+        uri.path = $scope.location.path();
+        $scope.route(uri);
+        $scope.$digest()
+      })
+    };
+
+    if (typeof angular === "object") {
+      angular.module("App", [])
+        .controller("Controller", ["$scope", "$location", controllerFunction])
+        .directive("widget", widgetDirective)
+    }
+
+
+</script>
+  <style>
+    body { margin:0; padding:0 0 50px; font-size:14px; font-family:Helvetica,Arial,sans-serif }
+    a, a:active, a:focus, a:visited { text-decoration:none; outline:none }
+    p { margin:0; padding:5px 0 }
+    p.thesis { padding:10px 0 }
+    h1 { color:#666; margin:0 0 20px; font-size:30px; font-weight:normal }
+    h2, .h2 { color:#666; margin:24px 0 6px; font-size:25px; font-weight:normal }
+    h3, .h3 { color:#777; margin:12px 0 4px; font-size:18px; font-weight:normal }
+    table { border-collapse:collapse; border-spacing:0; width:100%; font-size:12px; margin:0 0 10px }
+    table th { text-align:left; padding:8px; color:#000; border:2px solid #ddd; border-width:0 0 2px 0 }
+    table th.sortable { cursor:pointer }
+    table td { text-align:left; border-top:1px solid #ddd; padding:8px; color:#333 }
+    table.compact td { padding:4px 8px }
+    table.striped tr:nth-child(odd) td { background:#f9f9f9 }
+    table.linked tbody tr:hover { background:#f9f9f9; cursor:pointer }
+    .rich, .rich td { font-weight:bold }
+    .code { padding:10px; font-size:13px; color:#333; background:#f6f6f6; border:1px solid #e5e5e5; border-radius:4px }
+
+    .header { text-align:left; background:#333; font-size:18px; padding:13px 0; margin-bottom:20px; color:#fff; background-image:linear-gradient(to bottom, #444 0px, #222 100%) }
+    .header a, .header a:visited, .header a:focus { color:#999 }
+
+    .notify-error { padding:5px 10px; background:#fee; color:red }
+    .status-skip, .status-skip td { color:grey }
+    .status-pass, .status-pass td { color:green }
+    .status-fail, .status-fail td { color:red }
+    .capitalize { text-transform:capitalize }
+    
+    .aside { margin:0 20px 0 0; display:block; width:255px; float:left }
+    .aside > div { margin-bottom: 15px }
+    .aside > div div:first-child { border-top-left-radius:4px; border-top-right-radius:4px }
+    .aside > div div:last-child { border-bottom-left-radius:4px; border-bottom-right-radius:4px }
+    .navcls { color:#678; background:#eee; border:1px solid #ddd; margin-bottom:-1px; display:block; padding:8px 9px; font-weight:bold; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer }
+    .navcls.expanded { color:#469 }
+    .navcls.active { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+    .navmet { color:#555; background:#fff; border:1px solid #ddd; font-size:12px; display:block; margin-bottom:-1px; padding:8px 10px; text-align:left; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; cursor:pointer }
+    .navmet:hover { background:#f8f8f8 }
+    .navmet.active, .navmet.active:hover { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+
+    .tabs { list-style:outside none none; margin:0 0 5px; padding:0; border-bottom:1px solid #ddd }
+    .tabs:after { clear:both }
+    .tabs li { float:left; margin-bottom:-1px; display:block; position:relative }
+    .tabs li div { border:1px solid transparent; border-radius:4px 4px 0 0; line-height:20px; margin-right:2px; padding:10px 15px; color:#428bca }
+    .tabs li div:hover { border-color:#eee #eee #ddd; background:#eee; cursor:pointer; }
+    .tabs li.active div { background:#fff; border-color:#ddd #ddd transparent; border-style:solid; border-width:1px; color:#555; cursor:default }
+    .failure-mesg { color:#900 }
+    .failure-trace { color:#333; white-space:pre; overflow:auto }
+
+    .link { color:#428BCA; padding:5px 15px 5px 5px; text-decoration:underline; cursor:pointer }
+    .link.active { color:#333; text-decoration:none }
+
+    .chart { padding:0; margin:0; width:890px }
+    .chart svg { height:300px; padding:0; margin:0; overflow:visible; float:right }
+    .chart.lower svg { height:180px }
+    .chart-label-y { font-size:12px; position:relative; top:5px; padding:0; margin:0 }
+
+    .expandable { cursor:pointer }
+    .clearfix { clear:both }
+    .sortable > .arrow { display:inline-block; width:12px; height:inherit; color:#c90 }
+    .content-main { margin:0 5px; display:block; float:left }
+
+    .content-wrap {  margin:0 auto; padding:0 5px </%block>}
+    
+    @media only screen and (min-width: 320px)  { .content-wrap { width:900px  } .content-main { width:600px } }
+    @media only screen and (min-width: 900px)  { .content-wrap { width:880px  } .content-main { width:590px } }
+    @media only screen and (min-width: 1000px) { .content-wrap { width:980px  } .content-main { width:690px } }
+    @media only screen and (min-width: 1100px) { .content-wrap { width:1080px } .content-main { width:790px } }
+    @media only screen and (min-width: 1200px) { .content-wrap { width:1180px } .content-main { width:890px } }
+
+  </style>
+</head>
+<body ng-controller="Controller">
+
+  <div class="header">
+    <div class="content-wrap">
+      <a href="https://github.com/openstack/rally">Rally</a>&nbsp;
+      <span>task results</span>
+    </div>
+  </div>
+
+  <div class="content-wrap">
+    
+
+    <p id="page-error" class="notify-error" style="display:none"></p>
+
+    <div id="content-nav" class="aside" ng-show="scenarios.length" ng-cloack>
+      <div>
+        <div class="navcls"
+             ng-class="{active:view.is_main}"
+             ng-click="location.path('')">Task overview</div>
+        <div class="navcls"
+             ng-class="{active:view.is_source}"
+             ng-click="location.path('source', '')">Input file</div>
+      </div>
+      <div>
+        <div class="navcls" title="{{n.cls}}"
+             ng-repeat-start="n in nav track by $index"
+             ng-click="showNav(n.idx)"
+             ng-class="{expanded:n.idx==nav_idx}">
+                <span ng-hide="n.idx==nav_idx">&#9658;</span>
+                <span ng-show="n.idx==nav_idx">&#9660;</span>
+                {{n.cls}}</div>
+        <div class="navmet" title="{{m.name}}"
+             ng-show="n.idx==nav_idx"
+             ng-class="{active:m.ref==scenario.ref}"
+             ng-click="location.path(m.ref)"
+             ng-repeat="m in n.met track by $index"
+             ng-repeat-end>{{m.name}}</div>
+      </div>
+    </div>
+
+    <div id="content-main" class="content-main" ng-show="scenarios.length" ng-cloak>
+
+      <div ng-show="view.is_main">
+        <h1>Task overview</h1>
+        <table class="linked compact"
+               ng-init="ov_srt='ref'; ov_dir=false">
+          <thead>
+            <tr>
+              <th class="sortable"
+                  title="Scenario name, with optional suffix of call number"
+                  ng-click="ov_srt='ref'; ov_dir=!ov_dir">
+                Scenario
+                <span class="arrow">
+                  <b ng-show="ov_srt=='ref' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='ref' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="How long the scenario run, without context duration"
+                  ng-click="ov_srt='load_duration'; ov_dir=!ov_dir">
+                Load duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='load_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='load_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="Scenario duration plus context duration"
+                  ng-click="ov_srt='full_duration'; ov_dir=!ov_dir">
+                Full duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='full_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='full_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of iterations"
+                  ng-click="ov_srt='iterations_count'; ov_dir=!ov_dir">
+                Iterations
+                <span class="arrow">
+                  <b ng-show="ov_srt=='iterations_count' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='iterations_count' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Scenario runner type"
+                  ng-click="ov_srt='runner'; ov_dir=!ov_dir">
+                Runner
+                <span class="arrow">
+                  <b ng-show="ov_srt=='runner' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='runner' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of errors occurred"
+                  ng-click="ov_srt='errors.length'; ov_dir=!ov_dir">
+                Errors
+                <span class="arrow">
+                  <b ng-show="ov_srt=='errors.length' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='errors.length' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Whether SLA check is successful"
+                  ng-click="ov_srt='sla_success'; ov_dir=!ov_dir">
+                Success (SLA)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='sla_success' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='sla_success' && ov_dir">&#x25be;</b>
+                </span>
+            <tr>
+          </thead>
+          <tbody>
+            <tr ng-repeat="sc in scenarios | orderBy:ov_srt:ov_dir"
+                ng-click="location.path(sc.ref)">
+              <td>{{sc.ref}}
+              <td>{{sc.load_duration | number:3}}
+              <td>{{sc.full_duration | number:3}}
+              <td>{{sc.iterations_count}}
+              <td>{{sc.runner}}
+              <td>{{sc.errors.length}}
+              <td>
+                <span ng-show="sc.sla_success" class="status-pass">&#x2714;</span>
+                <span ng-hide="sc.sla_success" class="status-fail">&#x2716;</span>
+            <tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div ng-show="view.is_source">
+        <h1>Input file</h1>
+        <pre class="code">{{source}}</pre>
+      </div>
+
+      <div ng-show="view.is_scenario">
+        <h1>{{scenario.cls}}.<wbr>{{scenario.name}} ({{scenario.full_duration | number:3}}s)</h1>
+        <ul class="tabs">
+          <li ng-repeat="t in tabs"
+              ng-show="t.isVisible()"
+              ng-class="{active:t.id == tab}"
+              ng-click="location.hash(t.id)">
+            <div>{{t.name}}</div>
+          </li>
+          <div class="clearfix"></div>
+        </ul>
+        <div ng-include="tab"></div>
+
+        <script type="text/ng-template" id="overview">
+          <p class="thesis">
+            Load duration: <b>{{scenario.load_duration | number:3}} s</b> &nbsp;
+            Full duration: <b>{{scenario.full_duration | number:3}} s</b> &nbsp;
+            Iterations: <b>{{scenario.iterations_count}}</b> &nbsp;
+            Failures: <b>{{scenario.errors.length}}</b>
+          </p>
+
+          <div ng-show="scenario.sla.length">
+            <h2>Service-level agreement</h2>
+            <table class="striped">
+              <thead>
+                <tr>
+                  <th>Criterion
+                  <th>Detail
+                  <th>Success
+                <tr>
+              </thead>
+              <tbody>
+                <tr class="rich"
+                    ng-repeat="row in scenario.sla track by $index"
+                    ng-class="{'status-fail':!row.success, 'status-pass':row.success}">
+                  <td>{{row.criterion}}
+                  <td>{{row.detail}}
+                  <td class="capitalize">{{row.success}}
+                <tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div widget="Table"
+               data="scenario.table"
+               lastrow-class="rich"
+               title="Total durations">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.iterations.iter"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.load_profile"
+               title="Load Profile"
+               title-class="h3"
+               name-x="Timeline (seconds)"
+               format-y="d"
+               format-x=",.2f"
+               class="lower">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.iterations.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; width:40%; margin-top:15px">
+          </div>
+
+          <div widget="Histogram"
+               ng-if="scenario.iterations.histogram.data.length"
+               data="scenario.iterations.histogram.data[mainHistogram.id]"
+               style="float:left; width:59%; margin-top:15px; position:relative; top:40px">
+          </div>
+
+          <select ng-model="mainHistogram"
+                  ng-show="scenario.iterations.histogram.data.length"
+                  ng-options="i.name for i in scenario.iterations.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="details">
+
+          <div widget="StackedArea"
+               data="scenario.atomic.iter"
+               title="Atomic Action Durations"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.atomic.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; margin-top:15px"
+               ng-style="compact_atomics() ? {width:'40%'} : {}">
+          </div>
+
+          <div widget="Histogram" data="scenario.atomic.histogram.data[atomicHistogram.id]"
+               ng-if="scenario.atomic.histogram.data.length"
+               style="float:left; position:relative; top:40px"
+               ng-style="compact_atomics() ? {width:'59%', 'margin-top':'15px'} : {}">
+          </div>
+
+          <select ng-show="scenario.atomic.histogram.data.length"
+                  ng-model="atomicHistogram"
+                  ng-options="i.name for i in scenario.atomic.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="output">
+
+          <div style="padding:10px 0 0">
+            <span class="link"
+                  ng-click="location.hash('output/additive')"
+                  ng-class="{active:scenario.output.active === 'additive'}"
+                  ng-if="scenario.output.has_additive">Aggregated</span>
+            <span class="link"
+                  ng-click="location.hash('output/complete')"
+                  ng-class="{active:scenario.output.active === 'complete'}"
+                  ng-if="scenario.output.has_complete">Per iteration</span>
+          </div>
+
+          <div ng-repeat="chart in scenario.additive_output"
+               ng-if="scenario.output.active === 'additive'">
+            <div widget="{{chart.widget}}"
+                 title="{{chart.title}}"
+                 description="{{chart.description}}"
+                 name-x="{{chart.axis_label}}"
+                 name-y="{{chart.label}}"
+                 data="chart.data">
+            </div>
+          </div>
+
+          <div ng-if="scenario.output.active === 'complete'" style="padding:10px 0 0">
+            <select ng-model="outputIteration">
+              <option ng-repeat="i in scenario.complete_output track by $index"
+                      value="{{$index}}">
+                Iteration {{$index}}
+            </select>
+
+            <div ng-repeat="chart in scenario.complete_output[outputIteration]">
+              <div widget="{{chart.widget}}"
+                   title="{{chart.title}}"
+                   description="{{chart.description}}"
+                   name-x="{{chart.axis_label}}"
+                   name-y="{{chart.label}}"
+                   data="chart.data">
+              </div>
+            </div>
+          </div>
+        </script>
+
+        <script type="text/ng-template" id="failures">
+          <h2>Task failures (<ng-pluralize
+            count="scenario.errors.length"
+            when="{'1': '1 iteration', 'other': '{} iterations'}"></ng-pluralize> failed)
+          </h2>
+          <table class="striped">
+            <thead>
+              <tr>
+                <th>
+                <th>Iteration
+                <th>Exception type
+                <th>Exception message
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="expandable"
+                  ng-repeat-start="i in scenario.errors track by $index"
+                  ng-click="i.expanded = ! i.expanded">
+                <td>
+                  <span ng-hide="i.expanded">&#9658;</span>
+                  <span ng-show="i.expanded">&#9660;</span>
+                <td>{{i.iteration}}
+                <td>{{i.type}}
+                <td class="failure-mesg">{{i.message}}
+              </tr>
+              <tr ng-show="i.expanded" ng-repeat-end>
+                <td colspan="4" class="failure-trace">{{i.traceback}}
+              </tr>
+            </tbody>
+          </table>
+        </script>
+
+        <script type="text/ng-template" id="task">
+          <h2>Subtask Configuration</h2>
+          <pre class="code">{{scenario.config}}</pre>
+        </script>
+      </div>
+
+    </div>
+    <div class="clearfix"></div>
+
+
+  </div>
+
+  <script type="text/javascript">
+    if (! window.angular) {(function(f){
+      f(document.getElementById("content-nav"), "none");
+      f(document.getElementById("content-main"), "none");
+      f(document.getElementById("page-error"), "block").textContent = "Failed to load AngularJS framework"
+    })(function(e, s){e.style.display = s; return e})}
+</script>
+</body>
+</html>

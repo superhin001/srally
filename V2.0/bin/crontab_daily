@@ -1,0 +1,2 @@
+00 19 * * * sh /root/hzc/daily_run/stability_native/rally_run.sh >>/root/hzc/daily_run/stability_native/native_run.log
+00 19 * * * sh /root/hzc/daily_run/stability_enhanced/rally_run.sh >>/root/hzc/daily_run/stability_enhanced/enhanced_run.log

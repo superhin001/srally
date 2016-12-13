@@ -1,0 +1,864 @@
+<!doctype html>
+<html ng-app="App">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rally | Rally Task Report</title>
+  
+  
+  <link rel="stylesheet" href="http://cdn.bootcss.com/nvd3/1.1.15-beta/nv.d3.css">
+  <script type="text/javascript" src="http://cdn.bootcss.com/angular.js/1.3.3/angular.min.js"></script>
+  <script type="text/javascript" src="http://cdn.bootcss.com/d3/3.4.13/d3.min.js"></script>
+  <script type="text/javascript" src="http://cdn.bootcss.com/nvd3/1.1.15-beta/nv.d3.min.js"></script>
+  
+
+  <script type="text/javascript">
+    "use strict";
+    var widgetDirective = function($compile) {
+  var Chart = {
+    _render: function(node, data, chart, do_after){
+      nv.addGraph(function() {
+        d3.select(node)
+          .datum(data).transition().duration(0)
+          .call(chart);
+        if (typeof do_after === "function") {
+          do_after(node, chart)
+        }
+        nv.utils.windowResize(chart.update);
+      })
+    },
+    /* NOTE(amaretskiy): this is actually a result of
+       d3.scale.category20().range(), excluding red color (#d62728)
+       which is reserved for errors */
+    _colors: ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c",
+              "#98df8a", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b",
+              "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7",
+              "#bcbd22", "#dbdb8d", "#17becf", "#9edae5"],
+    _widgets: {
+      Pie: "pie",
+      StackedArea: "stack",
+      Lines: "lines",
+      Histogram: "histogram"
+    },
+    get_chart: function(widget) {
+      if (widget in this._widgets) {
+        var name = this._widgets[widget];
+        return Chart[name]
+      }
+      return function() { console.log("Error: unexpected widget:", widget) }
+    },
+    pie: function(node, data, opts, do_after) {
+      var chart = nv.models.pieChart()
+        .x(function(d) { return d.key })
+        .y(function(d) { return d.values })
+        .showLabels(true)
+        .labelType("percent")
+        .donut(true)
+        .donutRatio(0.25)
+        .donutLabelsOutside(true)
+        .color(function(d){
+          if (d.data && d.data.color) { return d.data.color }
+        });
+
+      var data_ = [], colors = [], colors_map = {errors: "#d62728"};
+      for (var i in data) {
+        var key = data[i][0];
+        if (! (key in colors_map)) {
+          if (! colors.length) { colors = Chart._colors.slice() }
+          colors_map[key] = colors.shift()
+        }
+        data_.push({key:key, values:data[i][1], color:colors_map[key]})
+      }
+      Chart._render(node, data_, chart)
+    },
+    stack: function(node, data, opts, do_after) {
+      var chart = nv.models.stackedAreaChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .showControls(opts.controls)
+        .clipEdge(true);
+      chart.xAxis
+        .tickFormat(d3.format(opts.xformat || "d"))
+        .axisLabel(opts.xname || "")
+        .showMaxMin(false);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var data_ = [];
+      for (var i in data) {
+        var d = {key:data[i][0], values:data[i][1]};
+        if (d.key === "failed_duration") {
+          d.color = "#d62728"
+        }
+        data_.push(d);
+      }
+      Chart._render(node, data_, chart, do_after);
+    },
+    lines: function(node, data, opts, do_after) {
+      var chart = nv.models.lineChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .clipEdge(true);
+      chart.xAxis
+        .tickFormat(d3.format(opts.xformat || "d"))
+        .axisLabel(opts.xname || "")
+        .showMaxMin(false);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var data_ = [];
+      for (var i in data) {
+        var d = {key:data[i][0], values:data[i][1]};
+        if (d.key === "failed_duration") {
+          d.color = "#d62728"
+        }
+        data_.push(d)
+      }
+      Chart._render(node, data_, chart, do_after)
+    },
+    histogram: function(node, data, opts) {
+      var chart = nv.models.multiBarChart()
+        .reduceXTicks(true)
+        .showControls(false)
+        .transitionDuration(0)
+        .groupSpacing(0.05);
+      chart
+        .legend.radioButtonMode(true);
+      chart.xAxis
+        .axisLabel("Duration (seconds)")
+        .tickFormat(d3.format(",.2f"));
+      chart.yAxis
+        .axisLabel("Iterations (frequency)")
+        .tickFormat(d3.format("d"));
+      Chart._render(node, data, chart)
+    }
+  };
+
+  return {
+    restrict: "A",
+    scope: { data: "=" },
+    link: function(scope, element, attrs) {
+      scope.$watch("data", function(data) {
+        if (! data) { return console.log("Chart has no data to render!") }
+        if (attrs.widget === "Table") {
+          var ng_class = attrs.lastrowClass ? " ng-class='{"+attrs.lastrowClass+":$last}'" : "";
+          var template = "<table class='striped'><thead>" +
+            "<tr><th ng-repeat='i in data.cols track by $index'>{{i}}<tr>" +
+            "</thead><tbody>" +
+            "<tr" + ng_class + " ng-repeat='row in data.rows track by $index'>" +
+            "<td ng-repeat='i in row track by $index'>{{i}}" +
+            "<tr>" +
+            "</tbody></table>";
+          var el = element.empty().append($compile(template)(scope)).children()[0]
+        } else {
+
+          var el_chart = element.addClass("chart").css({display:"block"});
+          var el = el_chart.html("<svg></svg>").children()[0];
+
+          var do_after = null;
+
+          if (attrs.widget in {StackedArea:0, Lines:0}) {
+
+            /* Hide widget if not enough data */
+            if ((! data.length) || (data[0].length < 1) || (data[0][1].length < 2)) {
+              return element.empty().css({display:"none"})
+            }
+
+            /* NOTE(amaretskiy): Dirty fix for changing chart width in case
+               if there are too long Y values that overlaps chart box. */
+            var do_after = function(node, chart){
+              var g_box = angular.element(el_chart[0].querySelector(".nv-y.nv-axis"));
+
+              if (g_box && g_box[0] && g_box[0].getBBox) {
+
+                try {
+                  // 30 is padding aroung graphs
+                  var width = g_box[0].getBBox().width + 30;
+                } catch (err) {
+                  // This happens sometimes, just skip silently
+                  return
+                }
+
+                // 890 is chart width (set by CSS)
+                if (typeof width === "number" && width > 890) {
+                  width = (890 * 2) - width;
+                  if (width > 0) {
+                    angular.element(node).css({width:width+"px"});
+                    chart.update()
+                  }
+                }
+              }
+            }
+          }
+          else if (attrs.widget === "Pie") {
+            if (! data.length) {
+              return element.empty().css({display:"none"})
+            }
+          }
+
+          var options = {
+            xname: attrs.nameX || "",
+            xformat: attrs.formatX || "d",
+            yformat: attrs.formatY || ",.3f",
+            controls: attrs.controls === "true",
+            guide: attrs.guide === "true"
+          };
+          Chart.get_chart(attrs.widget)(el, data, options, do_after);
+        }
+
+        if (attrs.nameY) {
+          /* NOTE(amaretskiy): Dirty fix for displaying Y-axis label correctly.
+             I believe sometimes NVD3 will allow doing this in normal way */
+          var label_y = angular.element("<div>").addClass("chart-label-y").text(attrs.nameY);
+          angular.element(el).parent().prepend(label_y)
+        }
+
+        if (attrs.description) {
+          var desc_el = angular.element("<div>").addClass(attrs.descriptionClass || "h3").text(attrs.description);
+          angular.element(el).parent().prepend(desc_el)
+        }
+
+        if (attrs.title) {
+          var title_el = angular.element("<div>").addClass(attrs.titleClass || "h2").text(attrs.title);
+          angular.element(el).parent().prepend(title_el)
+        }
+
+        angular.element(el).parent().append(angular.element("<div style='clear:both'>"))
+      });
+    }
+  }
+};
+
+    var controllerFunction = function($scope, $location) {
+        $scope.source = "{\n  \"ThinkStack_NeutronNetworks.get_network_and_create_update_delete_ports\": [\n    {\n      \"args\": {\n        \"port_create_args\": {}, \n        \"port_update_args\": {\n          \"admin_state_up\": false, \n          \"device_id\": \"dummy_id\", \n          \"device_owner\": \"dummy_owner\", \n          \"name\": \"_port_updated\"\n        }, \n        \"ports_per_network\": 5\n      }, \n      \"context\": {\n        \"network\": {\n          \"dns_nameservers\": null, \n          \"network_create_args\": {}, \n          \"networks_per_tenant\": 1, \n          \"start_cidr\": \"10.2.0.0/24\", \n          \"subnets_per_network\": 1\n        }, \n        \"quotas\": {\n          \"neutron\": {\n            \"network\": -1, \n            \"port\": -1\n          }\n        }, \n        \"users\": {\n          \"define_flag\": true, \n          \"define_tenant_id\": \"b851fb5ae7974c038ff35f14e365d515\", \n          \"define_tenant_name\": \"enhance\", \n          \"define_user_id\": \"a609bbc8419741b5924c1fcbf4cc2a47\", \n          \"define_user_name\": \"enhance\", \n          \"define_user_password\": \"123456\", \n          \"project_domain\": \"default\", \n          \"resource_management_workers\": 20, \n          \"tenants\": 1, \n          \"user_choice_method\": \"random\", \n          \"user_domain\": \"default\", \n          \"users_per_tenant\": 1\n        }\n      }, \n      \"runner\": {\n        \"concurrency\": 10, \n        \"times\": 100, \n        \"type\": \"constant\"\n      }\n    }\n  ]\n}";
+        $scope.scenarios = [{"load_profile": [["parallel iterations", [[0.0, 0], [0.3839718403816223, 9.876122529824572], [0.7679436807632446, 10], [1.1519155211448668, 10], [1.5358873615264892, 10], [1.9198592019081115, 10], [2.3038310422897337, 10], [2.687802882671356, 10], [3.0717747230529784, 10], [3.4557465634346007, 9.991992749437465], [3.839718403816223, 9.9618220607462], [4.2236902441978454, 9.98368637834871], [4.607662084579467, 9.951816045364435], [4.99163392496109, 10], [5.375605765342712, 10], [5.759577605724335, 10], [6.143549446105957, 10], [6.527521286487579, 9.952998911776557], [6.9114931268692015, 9.987259814675099], [7.295464967250823, 9.987660312751641], [7.679436807632446, 9.973917329917253], [8.063408648014068, 9.987246154275587], [8.447380488395691, 9.987014548411167], [8.831352328777314, 10], [9.215324169158935, 10], [9.599296009540558, 9.987413183705963], [9.98326784992218, 9.96208307745077], [10.367239690303801, 9.98730638421888], [10.751211530685424, 9.973586996620009], [11.135183371067047, 9.974461883115904], [11.51915521144867, 9.986822060963526], [11.90312705183029, 10], [12.287098892211914, 10], [12.671070732593536, 10], [13.055042572975157, 9.964971010092636], [13.43901441335678, 9.97360500351027], [13.822986253738403, 10], [14.206958094120026, 10], [14.590929934501647, 9.97428119328601], [14.97490177488327, 9.987405111651706], [15.358873615264892, 10], [15.742845455646513, 10], [16.126817296028136, 9.96060651244918], [16.51078913640976, 9.987352953762668], [16.894760976791382, 9.960617068212438], [17.278732817173005, 10], [17.662704657554627, 9.975760862923863], [18.046676497936247, 9.986079431971968], [18.43064833831787, 10], [18.814620178699492, 10], [19.198592019081115, 9.95942675067331], [19.582563859462738, 9.988058948046438], [19.96653569984436, 9.98631414247265], [20.350507540225983, 10], [20.734479380607603, 9.987577108500073], [21.118451220989225, 9.975365332265321], [21.50242306137085, 10], [21.88639490175247, 10], [22.270366742134094, 9.972961101951546], [22.654338582515717, 10], [23.03831042289734, 9.956405318672582], [23.42228226327896, 10], [23.80625410366058, 10], [24.190225944042204, 9.957283309804728], [24.574197784423827, 10], [24.95816962480545, 10], [25.342141465187073, 9.985655338659914], [25.726113305568695, 9.97432093263005], [26.110085145950315, 9.988663731188376], [26.494056986331938, 9.986584866753851], [26.87802882671356, 10], [27.262000667095183, 9.974779176940888], [27.645972507476806, 9.987361025816924], [28.02994434785843, 10], [28.41391618824005, 9.986767419365485], [28.79788802862167, 9.96359876086911], [29.181859869003294, 9.974529564186204], [29.565831709384916, 9.987131903661504], [29.94980354976654, 10], [30.333775390148162, 9.973354769828337], [30.717747230529785, 9.986324698235908], [31.101719070911408, 10], [31.485690911293027, 9.986761831020223], [31.86966275167465, 9.960697788754999], [32.25363459205627, 9.986879186270567], [32.6376064324379, 9.97299525295034], [33.02157827281952, 9.985300789199892], [33.40555011320114, 10], [33.789521953582764, 9.986686698822934], [34.17349379396438, 9.986438948849985], [34.55746563434601, 10], [34.94143747472763, 9.585098295137053], [35.325409315109255, 9], [35.709381155490874, 7.252134225997712], [36.09335299587249, 6.115388017445024], [36.47732483625412, 5.165710056830713], [36.86129667663574, 4.263884475700201], [37.245268517017365, 3.500378511663543], [37.629240357398984, 2.9349837333763307], [38.01321219778061, 0.07449096821762385], [38.39718403816223, 0]]]], "errors": [{"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 0}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 1}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 2}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 3}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 4}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 5}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 6}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 7}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 8}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 9}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 10}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 11}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 12}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 13}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 14}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 15}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 16}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 17}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 18}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 19}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 20}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 21}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 22}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 23}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 24}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 25}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 26}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 27}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 28}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 29}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 30}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 31}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 32}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 33}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 34}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 35}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 36}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 37}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 38}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 39}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 40}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 41}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 42}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 43}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 44}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 45}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 46}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 47}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 48}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 49}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 50}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 51}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 52}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 53}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 54}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 55}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 56}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 57}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 58}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 59}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 60}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 61}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 62}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 63}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 64}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 65}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 66}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 67}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 68}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 69}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 70}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 71}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 72}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 73}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 74}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 75}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 76}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 77}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 78}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 79}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 80}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 81}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 82}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 83}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 84}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 85}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 86}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 87}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 88}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 89}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 90}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 91}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 92}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 93}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 94}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 95}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 96}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 97}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 98}, {"type": "KeyError", "message": "'id'", "traceback": "Traceback (most recent call last):\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/runner.py\", line 67, in _run_scenario_once\n    getattr(scenario_inst, method_name)(**scenario_kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/thinkstack_network.py\", line 277, in get_network_and_create_update_delete_ports\n    _port = self._create_port(network, port_create_args)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/task/atomic.py\", line 84, in func_atomic_actions\n    f = func(self, *args, **kwargs)\n  File \"/usr/local/lib/python2.7/dist-packages/rally/plugins/openstack/scenarios/neutron/utils.py\", line 473, in _create_port\n    port_create_args[\"network_id\"] = network[\"network\"][\"id\"]\nKeyError: 'id'\n", "iteration": 99}], "name": "get_network_and_create_update_delete_ports", "runner": "constant", "iterations_count": 100, "output_errors": [], "pos": "0", "load_duration": 37.64429807662964, "sla_success": true, "met": "get_network_and_create_update_delete_ports", "atomic": {"pie": [["neutron.create_port", 6.682872772216797e-06], ["neutron.get_network", 3.634584679603577]], "iter": [["neutron.create_port", [[1, 1.0013580322265625e-05], [2, 1.0013580322265625e-05], [3, 9.059906005859375e-06], [4, 1.0967254638671875e-05], [5, 1.0013580322265625e-05], [6, 1.3828277587890625e-05], [7, 2.002716064453125e-05], [8, 1.2874603271484375e-05], [9, 9.775161743164062e-06], [10, 1.2874603271484375e-05], [11, 5.9604644775390625e-06], [12, 7.867813110351562e-06], [13, 5.9604644775390625e-06], [14, 5.9604644775390625e-06], [15, 5.9604644775390625e-06], [16, 5.9604644775390625e-06], [17, 5.9604644775390625e-06], [18, 5.9604644775390625e-06], [19, 5.9604644775390625e-06], [20, 5.9604644775390625e-06], [21, 5.0067901611328125e-06], [22, 5.9604644775390625e-06], [23, 5.9604644775390625e-06], [24, 5.9604644775390625e-06], [25, 5.9604644775390625e-06], [26, 5.9604644775390625e-06], [27, 5.9604644775390625e-06], [28, 5.0067901611328125e-06], [29, 7.152557373046875e-06], [30, 6.198883056640625e-06], [31, 5.0067901611328125e-06], [32, 5.0067901611328125e-06], [33, 6.198883056640625e-06], [34, 5.0067901611328125e-06], [35, 5.9604644775390625e-06], [36, 5.9604644775390625e-06], [37, 5.0067901611328125e-06], [38, 5.0067901611328125e-06], [39, 5.9604644775390625e-06], [40, 5.9604644775390625e-06], [41, 5.9604644775390625e-06], [42, 5.9604644775390625e-06], [43, 5.9604644775390625e-06], [44, 5.9604644775390625e-06], [45, 5.9604644775390625e-06], [46, 5.9604644775390625e-06], [47, 5.0067901611328125e-06], [48, 5.9604644775390625e-06], [49, 6.9141387939453125e-06], [50, 5.9604644775390625e-06], [51, 5.9604644775390625e-06], [52, 5.9604644775390625e-06], [53, 5.9604644775390625e-06], [54, 6.9141387939453125e-06], [55, 5.0067901611328125e-06], [56, 7.152557373046875e-06], [57, 6.9141387939453125e-06], [58, 6.198883056640625e-06], [59, 5.9604644775390625e-06], [60, 5.9604644775390625e-06], [61, 9.059906005859375e-06], [62, 6.9141387939453125e-06], [63, 5.9604644775390625e-06], [64, 5.9604644775390625e-06], [65, 5.9604644775390625e-06], [66, 5.9604644775390625e-06], [67, 5.0067901611328125e-06], [68, 5.0067901611328125e-06], [69, 5.9604644775390625e-06], [70, 6.198883056640625e-06], [71, 6.198883056640625e-06], [72, 5.9604644775390625e-06], [73, 5.9604644775390625e-06], [74, 8.821487426757812e-06], [75, 5.9604644775390625e-06], [76, 5.9604644775390625e-06], [77, 5.9604644775390625e-06], [78, 5.0067901611328125e-06], [79, 5.9604644775390625e-06], [80, 5.9604644775390625e-06], [81, 5.9604644775390625e-06], [82, 5.9604644775390625e-06], [83, 6.9141387939453125e-06], [84, 5.9604644775390625e-06], [85, 7.152557373046875e-06], [86, 5.0067901611328125e-06], [87, 5.0067901611328125e-06], [88, 5.9604644775390625e-06], [89, 5.9604644775390625e-06], [90, 1.0013580322265625e-05], [91, 5.9604644775390625e-06], [92, 6.9141387939453125e-06], [93, 5.9604644775390625e-06], [94, 5.9604644775390625e-06], [95, 5.9604644775390625e-06], [96, 1.0013580322265625e-05], [97, 6.198883056640625e-06], [98, 5.9604644775390625e-06], [99, 5.9604644775390625e-06], [100, 5.0067901611328125e-06]]], ["neutron.get_network", [[1, 4.096739768981934], [2, 4.317301034927368], [3, 6.467343091964722], [4, 3.50797700881958], [5, 4.421389102935791], [6, 6.290479898452759], [7, 4.477170944213867], [8, 3.7580502033233643], [9, 3.443188190460205], [10, 6.401190996170044], [11, 3.281294107437134], [12, 6.094193935394287], [13, 3.5176570415496826], [14, 3.276914119720459], [15, 3.2291581630706787], [16, 3.657170057296753], [17, 3.2519171237945557], [18, 3.1141819953918457], [19, 3.4391729831695557], [20, 3.5616350173950195], [21, 3.1979141235351562], [22, 3.153384208679199], [23, 3.001652956008911], [24, 3.5441038608551025], [25, 3.136979818344116], [26, 3.3064510822296143], [27, 3.275777816772461], [28, 3.1675758361816406], [29, 3.3180880546569824], [30, 3.053061008453369], [31, 3.1704070568084717], [32, 6.1875529289245605], [33, 6.240493059158325], [34, 3.3684661388397217], [35, 3.246246099472046], [36, 3.2988460063934326], [37, 3.123867988586426], [38, 3.0005412101745605], [39, 2.88156795501709], [40, 3.3564701080322266], [41, 3.076190948486328], [42, 3.1819651126861572], [43, 3.076231002807617], [44, 3.1536378860473633], [45, 3.228710889816284], [46, 3.1302011013031006], [47, 3.050344944000244], [48, 3.1341609954833984], [49, 6.173059940338135], [50, 6.14001989364624], [51, 3.189710855484009], [52, 2.9934089183807373], [53, 3.2984771728515625], [54, 2.871255874633789], [55, 3.285628080368042], [56, 3.1143479347229004], [57, 6.0030357837677], [58, 3.273959159851074], [59, 2.992548942565918], [60, 3.394584894180298], [61, 3.4290590286254883], [62, 3.079397201538086], [63, 3.4035110473632812], [64, 3.164557933807373], [65, 3.3245699405670166], [66, 6.063655853271484], [67, 6.196247100830078], [68, 3.228050947189331], [69, 3.1266701221466064], [70, 3.3195908069610596], [71, 3.2290608882904053], [72, 3.165872812271118], [73, 3.218132972717285], [74, 3.0834929943084717], [75, 3.062652826309204], [76, 3.220741033554077], [77, 3.0462751388549805], [78, 3.085587978363037], [79, 3.15628719329834], [80, 3.158957004547119], [81, 3.1328752040863037], [82, 3.140411138534546], [83, 2.844419002532959], [84, 3.267143964767456], [85, 3.26300311088562], [86, 3.261072874069214], [87, 2.965895891189575], [88, 3.215282917022705], [89, 3.2958409786224365], [90, 3.2027928829193115], [91, 5.999446868896484], [92, 5.924365997314453], [93, 3.0096349716186523], [94, 3.1331357955932617], [95, 3.033828020095825], [96, 3.137629985809326], [97, 3.16648006439209], [98, 3.105130910873413], [99, 3.1769890785217285], [100, 3.025665044784546]]], ["failed_duration", [[1, 0.00010514259338378906], [2, 9.703636169433594e-05], [3, 9.989738464355469e-05], [4, 0.00012302398681640625], [5, 9.989738464355469e-05], [6, 0.00011229515075683594], [7, 0.0001239776611328125], [8, 0.00010395050048828125], [9, 0.00010704994201660156], [10, 0.000164031982421875], [11, 9.703636169433594e-05], [12, 6.937980651855469e-05], [13, 5.0067901611328125e-05], [14, 5.507469177246094e-05], [15, 5.173683166503906e-05], [16, 6.079673767089844e-05], [17, 5.3882598876953125e-05], [18, 4.9114227294921875e-05], [19, 5.698204040527344e-05], [20, 5.0067901611328125e-05], [21, 4.982948303222656e-05], [22, 4.887580871582031e-05], [23, 5.1021575927734375e-05], [24, 5.030632019042969e-05], [25, 5.412101745605469e-05], [26, 5.0067901611328125e-05], [27, 5.221366882324219e-05], [28, 5.316734313964844e-05], [29, 5.5789947509765625e-05], [30, 5.078315734863281e-05], [31, 4.696846008300781e-05], [32, 6.222724914550781e-05], [33, 4.76837158203125e-05], [34, 6.580352783203125e-05], [35, 4.982948303222656e-05], [36, 4.792213439941406e-05], [37, 5.2928924560546875e-05], [38, 5.364418029785156e-05], [39, 5.817413330078125e-05], [40, 5.1021575927734375e-05], [41, 4.887580871582031e-05], [42, 6.29425048828125e-05], [43, 0.00010085105895996094], [44, 5.0067901611328125e-05], [45, 5.0067901611328125e-05], [46, 5.2928924560546875e-05], [47, 6.103515625e-05], [48, 5.1975250244140625e-05], [49, 7.128715515136719e-05], [50, 5.221366882324219e-05], [51, 5.1021575927734375e-05], [52, 5.602836608886719e-05], [53, 5.7697296142578125e-05], [54, 6.628036499023438e-05], [55, 5.078315734863281e-05], [56, 5.3882598876953125e-05], [57, 6.437301635742188e-05], [58, 5.8650970458984375e-05], [59, 5.221366882324219e-05], [60, 0.00010323524475097656], [61, 6.389617919921875e-05], [62, 0.00013685226440429688], [63, 0.00012183189392089844], [64, 5.221366882324219e-05], [65, 5.0067901611328125e-05], [66, 5.221366882324219e-05], [67, 5.1975250244140625e-05], [68, 4.792213439941406e-05], [69, 0.0001049041748046875], [70, 5.2928924560546875e-05], [71, 5.2928924560546875e-05], [72, 5.841255187988281e-05], [73, 5.2928924560546875e-05], [74, 5.221366882324219e-05], [75, 5.53131103515625e-05], [76, 5.1021575927734375e-05], [77, 4.887580871582031e-05], [78, 5.1975250244140625e-05], [79, 4.982948303222656e-05], [80, 5.2928924560546875e-05], [81, 6.389617919921875e-05], [82, 5.6743621826171875e-05], [83, 5.316734313964844e-05], [84, 5.0067901611328125e-05], [85, 5.269050598144531e-05], [86, 5.507469177246094e-05], [87, 5.602836608886719e-05], [88, 5.91278076171875e-05], [89, 5.1021575927734375e-05], [90, 5.602836608886719e-05], [91, 6.723403930664062e-05], [92, 6.723403930664062e-05], [93, 5.1021575927734375e-05], [94, 5.435943603515625e-05], [95, 5.1021575927734375e-05], [96, 5.1975250244140625e-05], [97, 5.173683166503906e-05], [98, 5.626678466796875e-05], [99, 5.698204040527344e-05], [100, 5.1975250244140625e-05]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 76, "x": 6.508827209472656e-06}, {"y": 10, "x": 8.0108642578125e-06}, {"y": 3, "x": 9.512901306152343e-06}, {"y": 7, "x": 1.1014938354492188e-05}, {"y": 0, "x": 1.2516975402832031e-05}, {"y": 3, "x": 1.4019012451171874e-05}, {"y": 0, "x": 1.5521049499511717e-05}, {"y": 0, "x": 1.7023086547851564e-05}, {"y": 0, "x": 1.8525123596191404e-05}, {"y": 1, "x": 2.002716064453125e-05}], "key": "neutron.create_port", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 46, "x": 3.2067114114761353}, {"y": 35, "x": 3.5690038204193115}, {"y": 2, "x": 3.931296229362488}, {"y": 1, "x": 4.293588638305664}, {"y": 3, "x": 4.65588104724884}, {"y": 0, "x": 5.018173456192017}, {"y": 0, "x": 5.380465865135193}, {"y": 0, "x": 5.742758274078369}, {"y": 5, "x": 6.105050683021545}, {"y": 8, "x": 6.467343091964722}], "key": "neutron.get_network", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 76, "x": 6.884336471557617e-06}, {"y": 10, "x": 8.761882781982422e-06}, {"y": 9, "x": 1.0639429092407227e-05}, {"y": 1, "x": 1.2516975402832031e-05}, {"y": 3, "x": 1.4394521713256836e-05}, {"y": 0, "x": 1.627206802368164e-05}, {"y": 0, "x": 1.8149614334106445e-05}, {"y": 1, "x": 2.002716064453125e-05}], "key": "neutron.create_port", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 64, "x": 3.2972845137119293}, {"y": 18, "x": 3.7501500248908997}, {"y": 2, "x": 4.20301553606987}, {"y": 3, "x": 4.65588104724884}, {"y": 0, "x": 5.108746558427811}, {"y": 0, "x": 5.561612069606781}, {"y": 3, "x": 6.014477580785751}, {"y": 10, "x": 6.467343091964722}], "key": "neutron.get_network", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 76, "x": 6.508827209472656e-06}, {"y": 10, "x": 8.0108642578125e-06}, {"y": 3, "x": 9.512901306152343e-06}, {"y": 7, "x": 1.1014938354492188e-05}, {"y": 0, "x": 1.2516975402832031e-05}, {"y": 3, "x": 1.4019012451171874e-05}, {"y": 0, "x": 1.5521049499511717e-05}, {"y": 0, "x": 1.7023086547851564e-05}, {"y": 0, "x": 1.8525123596191404e-05}, {"y": 1, "x": 2.002716064453125e-05}], "key": "neutron.create_port", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 46, "x": 3.2067114114761353}, {"y": 35, "x": 3.5690038204193115}, {"y": 2, "x": 3.931296229362488}, {"y": 1, "x": 4.293588638305664}, {"y": 3, "x": 4.65588104724884}, {"y": 0, "x": 5.018173456192017}, {"y": 0, "x": 5.380465865135193}, {"y": 0, "x": 5.742758274078369}, {"y": 5, "x": 6.105050683021545}, {"y": 8, "x": 6.467343091964722}], "key": "neutron.get_network", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 0], ["errors", 100]], "iter": [["duration", [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0], [14, 0], [15, 0], [16, 0], [17, 0], [18, 0], [19, 0], [20, 0], [21, 0], [22, 0], [23, 0], [24, 0], [25, 0], [26, 0], [27, 0], [28, 0], [29, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0], [36, 0], [37, 0], [38, 0], [39, 0], [40, 0], [41, 0], [42, 0], [43, 0], [44, 0], [45, 0], [46, 0], [47, 0], [48, 0], [49, 0], [50, 0], [51, 0], [52, 0], [53, 0], [54, 0], [55, 0], [56, 0], [57, 0], [58, 0], [59, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0], [67, 0], [68, 0], [69, 0], [70, 0], [71, 0], [72, 0], [73, 0], [74, 0], [75, 0], [76, 0], [77, 0], [78, 0], [79, 0], [80, 0], [81, 0], [82, 0], [83, 0], [84, 0], [85, 0], [86, 0], [87, 0], [88, 0], [89, 0], [90, 0], [91, 0], [92, 0], [93, 0], [94, 0], [95, 0], [96, 0], [97, 0], [98, 0], [99, 0], [100, 0]]], ["idle_duration", [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0], [14, 0], [15, 0], [16, 0], [17, 0], [18, 0], [19, 0], [20, 0], [21, 0], [22, 0], [23, 0], [24, 0], [25, 0], [26, 0], [27, 0], [28, 0], [29, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0], [36, 0], [37, 0], [38, 0], [39, 0], [40, 0], [41, 0], [42, 0], [43, 0], [44, 0], [45, 0], [46, 0], [47, 0], [48, 0], [49, 0], [50, 0], [51, 0], [52, 0], [53, 0], [54, 0], [55, 0], [56, 0], [57, 0], [58, 0], [59, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0], [67, 0], [68, 0], [69, 0], [70, 0], [71, 0], [72, 0], [73, 0], [74, 0], [75, 0], [76, 0], [77, 0], [78, 0], [79, 0], [80, 0], [81, 0], [82, 0], [83, 0], [84, 0], [85, 0], [86, 0], [87, 0], [88, 0], [89, 0], [90, 0], [91, 0], [92, 0], [93, 0], [94, 0], [95, 0], [96, 0], [97, 0], [98, 0], [99, 0], [100, 0]]], ["failed_duration", [[1, 4.09685492515564], [2, 4.317408084869385], [3, 6.467452049255371], [4, 3.508111000061035], [5, 4.421499013900757], [6, 6.2906060218811035], [7, 4.4773149490356445], [8, 3.758167028427124], [9, 3.443305015563965], [10, 6.401367902755737], [11, 3.2813971042633057], [12, 6.094271183013916], [13, 3.5177130699157715], [14, 3.276975154876709], [15, 3.2292158603668213], [16, 3.6572368144989014], [17, 3.25197696685791], [18, 3.114237070083618], [19, 3.4392359256744385], [20, 3.5616910457611084], [21, 3.1979689598083496], [22, 3.1534390449523926], [23, 3.0017099380493164], [24, 3.5441601276397705], [25, 3.13703989982605], [26, 3.306507110595703], [27, 3.2758359909057617], [28, 3.1676340103149414], [29, 3.3181509971618652], [30, 3.0531179904937744], [31, 3.170459032058716], [32, 6.187620162963867], [33, 6.240546941757202], [34, 3.368536949157715], [35, 3.2463018894195557], [36, 3.2988998889923096], [37, 3.1239259243011475], [38, 3.0005998611450195], [39, 2.881632089614868], [40, 3.356527090072632], [41, 3.0762457847595215], [42, 3.1820340156555176], [43, 3.0763378143310547], [44, 3.153693914413452], [45, 3.228766918182373], [46, 3.1302599906921387], [47, 3.0504109859466553], [48, 3.13421893119812], [49, 6.17313814163208], [50, 6.140078067779541], [51, 3.189767837524414], [52, 2.9934709072113037], [53, 3.2985408306121826], [54, 2.8713290691375732], [55, 3.2856838703155518], [56, 3.1144089698791504], [57, 6.003107070922852], [58, 3.27402400970459], [59, 2.9926071166992188], [60, 3.3946940898895264], [61, 3.4291319847106934], [62, 3.079540967941284], [63, 3.4036388397216797], [64, 3.164616107940674], [65, 3.3246259689331055], [66, 6.063714027404785], [67, 6.196304082870483], [68, 3.2281038761138916], [69, 3.1267809867858887], [70, 3.3196499347686768], [71, 3.2291200160980225], [72, 3.1659371852874756], [73, 3.2181918621063232], [74, 3.0835540294647217], [75, 3.062714099884033], [76, 3.2207980155944824], [77, 3.046329975128174], [78, 3.0856449604034424], [79, 3.1563429832458496], [80, 3.1590158939361572], [81, 3.1329450607299805], [82, 3.1404738426208496], [83, 2.8444790840148926], [84, 3.267199993133545], [85, 3.2630629539489746], [86, 3.2611329555511475], [87, 2.965956926345825], [88, 3.2153480052948], [89, 3.295897960662842], [90, 3.2028589248657227], [91, 5.9995200634002686], [92, 5.924440145492554], [93, 3.0096919536590576], [94, 3.1331961154937744], [95, 3.0338850021362305], [96, 3.1376919746398926], [97, 3.1665380001068115], [98, 3.1051931381225586], [99, 3.1770520210266113], [100, 3.025722026824951]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 100, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}, {"y": 0, "x": 0.0}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "additive_output": [], "table": {"rows": [["neutron.create_port", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100], ["neutron.get_network", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100], ["total", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", 100]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "full_duration": 42.7859308719635, "config": "{\n  \"ThinkStack_NeutronNetworks.get_network_and_create_update_delete_ports\": [\n    {\n      \"runner\": {\n        \"type\": \"constant\", \n        \"concurrency\": 10, \n        \"times\": 100\n      }, \n      \"args\": {\n        \"ports_per_network\": 5, \n        \"port_create_args\": {}, \n        \"port_update_args\": {\n          \"device_owner\": \"dummy_owner\", \n          \"admin_state_up\": false, \n          \"name\": \"_port_updated\", \n          \"device_id\": \"dummy_id\"\n        }\n      }, \n      \"context\": {\n        \"quotas\": {\n          \"neutron\": {\n            \"network\": -1, \n            \"port\": -1\n          }\n        }, \n        \"network\": {\n          \"network_create_args\": {}, \n          \"subnets_per_network\": 1, \n          \"start_cidr\": \"10.2.0.0/24\", \n          \"dns_nameservers\": null, \n          \"networks_per_tenant\": 1\n        }, \n        \"users\": {\n          \"define_flag\": true, \n          \"define_user_id\": \"a609bbc8419741b5924c1fcbf4cc2a47\", \n          \"users_per_tenant\": 1, \n          \"define_tenant_id\": \"b851fb5ae7974c038ff35f14e365d515\", \n          \"define_user_name\": \"enhance\", \n          \"project_domain\": \"default\", \n          \"define_tenant_name\": \"enhance\", \n          \"define_user_password\": \"123456\", \n          \"user_choice_method\": \"random\", \n          \"user_domain\": \"default\", \n          \"tenants\": 1, \n          \"resource_management_workers\": 20\n        }\n      }\n    }\n  ]\n}", "sla": [], "complete_output": [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []], "cls": "ThinkStack_NeutronNetworks"}];
+
+      $scope.location = {
+        /* #/path/hash/sub/div */
+        normalize: function(str) {
+          /* Remove unwanted characters from string */
+          if (typeof str !== "string") { return "" }
+          return str.replace(/[^\w\-\.]/g, "")
+        },
+        uri: function(obj) {
+          /* Getter/Setter */
+          if (! obj) {
+            var uri = {path: "", hash: "", sub: "", div: ""};
+            var arr = ["div", "sub", "hash", "path"];
+            angular.forEach($location.url().split("/"), function(value){
+              var v = $scope.location.normalize(value);
+              if (v) { var k = arr.pop(); if (k) { this[k] = v }}
+            }, uri);
+            return uri
+          }
+          var arr = [obj.path, obj.hash, obj.sub, obj.div], res = [];
+          for (var i in arr) { if (! arr[i]) { break }; res.push(arr[i]) }
+          return $location.url("/" + res.join("/"))
+        },
+        path: function(path, hash) {
+          /* Getter/Setter */
+          if (path === "") { return this.uri({}) }
+          path = this.normalize(path);
+          var uri = this.uri();
+          if (! path) { return uri.path }
+          uri.path = path;
+          var _hash = this.normalize(hash);
+          if (_hash || hash === "") { uri.hash = _hash }
+          return this.uri(uri)
+        },
+        hash: function(hash) {
+          /* Getter/Setter */
+          if (hash) { this.uri({path:this.uri().path, hash:hash}) }
+          return this.uri().hash
+        }
+      }
+
+      /* Dispatch */
+
+      $scope.route = function(uri) {
+        if (! $scope.scenarios_map) { return }
+        if (uri.path in $scope.scenarios_map) {
+          $scope.view = {is_scenario:true};
+          $scope.scenario = $scope.scenarios_map[uri.path];
+          $scope.nav_idx = $scope.nav_map[uri.path];
+          if ($scope.scenario.iterations.histogram.views.length) {
+            $scope.mainHistogram = $scope.scenario.iterations.histogram.views[0]
+          }
+          if ($scope.scenario.atomic.histogram.views.length) {
+            $scope.atomicHistogram = $scope.scenario.atomic.histogram.views[0]
+          }
+          $scope.outputIteration = 0;
+          $scope.showTab(uri);
+        } else {
+          $scope.scenario = null;
+          if (uri.path === "source") {
+            $scope.view = {is_source:true}
+          } else {
+            $scope.view = {is_main:true}
+          }
+        }
+      }
+
+      $scope.$on("$locationChangeSuccess", function (event, newUrl, oldUrl) {
+        $scope.route($scope.location.uri())
+      });
+
+      $scope.showNav = function(nav_idx) { $scope.nav_idx = nav_idx }
+
+      /* Tabs */
+
+      $scope.tabs = [
+        {
+          id: "overview",
+          name: "Overview",
+          visible: function(){ return !! $scope.scenario.iterations.pie.length }
+        },{
+          id: "details",
+          name: "Details",
+          visible: function(){ return !! $scope.scenario.atomic.pie.length }
+        },{
+          id: "output",
+          name: "Scenario Data",
+          visible: function(){ return $scope.scenario.output.length }
+        },{
+          id: "failures",
+          name: "Failures",
+          visible: function(){ return !! $scope.scenario.errors.length }
+        },{
+          id: "task",
+          name: "Input task",
+          visible: function(){ return !! $scope.scenario.config }
+        }
+      ];
+      $scope.tabs_map = {};
+      angular.forEach($scope.tabs,
+                      function(tab){ this[tab.id] = tab }, $scope.tabs_map);
+
+      $scope.showTab = function(uri) {
+        $scope.tab = uri.hash in $scope.tabs_map ? uri.hash : "overview";
+        if (! $scope.scenario.output) {
+          var has_additive = !! $scope.scenario.additive_output.length;
+          var has_complete = !! ($scope.scenario.complete_output.length
+                                 && $scope.scenario.complete_output[0].length);
+          $scope.scenario.output = {
+            has_additive: has_additive,
+            has_complete: has_complete,
+            length: has_additive + has_complete,
+            active: has_additive ? "additive" : (has_complete ? "complete" : "")
+          }
+        }
+        if (uri.hash === "output") {
+          if (uri.sub && $scope.scenario.output["has_" + uri.sub]) {
+            $scope.scenario.output.active = uri.sub
+          }
+        }
+      }
+
+      for (var i in $scope.tabs) {
+        if ($scope.tabs[i].id === $scope.location.hash()) {
+          $scope.tab = $scope.tabs[i].id
+        }
+        $scope.tabs[i].isVisible = function() {
+          if ($scope.scenario) {
+            if (this.visible()) { return true }
+            /* If tab should be hidden but is selected - show another one */
+            if (this.id === $scope.location.hash()) {
+              for (var i in $scope.tabs) {
+                var tab = $scope.tabs[i];
+                if (tab.id != this.id && tab.visible()) {
+                  $scope.tab = tab.id;
+                  return false
+                }
+              }
+            }
+          }
+          return false
+        }
+      }
+
+      /* Other helpers */
+
+      $scope.showError = function(message) {
+          return (function (e) {
+            e.style.display = "block";
+            e.textContent = message
+          })(document.getElementById("page-error"))
+      }
+
+      $scope.compact_atomics = function() {
+        return ($scope.scenario && $scope.scenario.atomic.iter.length < 9)
+      }
+
+      /* Initialization */
+
+      angular.element(document).ready(function(){
+        if (! $scope.scenarios.length) {
+          return $scope.showError("No data...")
+        }
+
+        /* Compose data mapping */
+
+        $scope.nav = [];
+        $scope.nav_map = {};
+        $scope.scenarios_map = {};
+        var met = [], itr = 0, cls_idx = 0;
+        var prev_cls, prev_met;
+
+        for (var idx in $scope.scenarios) {
+          var sc = $scope.scenarios[idx];
+          if (! prev_cls) {
+            prev_cls = sc.cls
+          }
+          else if (prev_cls !== sc.cls) {
+            $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx});
+            prev_cls = sc.cls;
+            met = [];
+            itr = 1;
+            cls_idx += 1
+          }
+
+          if (prev_met !== sc.met) { itr = 1 };
+          sc.ref = $scope.location.normalize(sc.cls+"."+sc.met+(itr > 1 ? "-"+itr : ""));
+          $scope.scenarios_map[sc.ref] = sc;
+          $scope.nav_map[sc.ref] = cls_idx;
+          met.push({name:sc.name, itr:itr, idx:idx, ref:sc.ref});
+          prev_met = sc.met;
+          itr += 1;
+        }
+
+        if (met.length) {
+          $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx})
+        }
+
+        /* Start */
+
+        var uri = $scope.location.uri();
+        uri.path = $scope.location.path();
+        $scope.route(uri);
+        $scope.$digest()
+      })
+    };
+
+    if (typeof angular === "object") {
+      angular.module("App", [])
+        .controller("Controller", ["$scope", "$location", controllerFunction])
+        .directive("widget", widgetDirective)
+    }
+
+
+</script>
+  <style>
+    body { margin:0; padding:0 0 50px; font-size:14px; font-family:Helvetica,Arial,sans-serif }
+    a, a:active, a:focus, a:visited { text-decoration:none; outline:none }
+    p { margin:0; padding:5px 0 }
+    p.thesis { padding:10px 0 }
+    h1 { color:#666; margin:0 0 20px; font-size:30px; font-weight:normal }
+    h2, .h2 { color:#666; margin:24px 0 6px; font-size:25px; font-weight:normal }
+    h3, .h3 { color:#777; margin:12px 0 4px; font-size:18px; font-weight:normal }
+    table { border-collapse:collapse; border-spacing:0; width:100%; font-size:12px; margin:0 0 10px }
+    table th { text-align:left; padding:8px; color:#000; border:2px solid #ddd; border-width:0 0 2px 0 }
+    table th.sortable { cursor:pointer }
+    table td { text-align:left; border-top:1px solid #ddd; padding:8px; color:#333 }
+    table.compact td { padding:4px 8px }
+    table.striped tr:nth-child(odd) td { background:#f9f9f9 }
+    table.linked tbody tr:hover { background:#f9f9f9; cursor:pointer }
+    .rich, .rich td { font-weight:bold }
+    .code { padding:10px; font-size:13px; color:#333; background:#f6f6f6; border:1px solid #e5e5e5; border-radius:4px }
+
+    .header { text-align:left; background:#333; font-size:18px; padding:13px 0; margin-bottom:20px; color:#fff; background-image:linear-gradient(to bottom, #444 0px, #222 100%) }
+    .header a, .header a:visited, .header a:focus { color:#999 }
+
+    .notify-error { padding:5px 10px; background:#fee; color:red }
+    .status-skip, .status-skip td { color:grey }
+    .status-pass, .status-pass td { color:green }
+    .status-fail, .status-fail td { color:red }
+    .capitalize { text-transform:capitalize }
+    
+    .aside { margin:0 20px 0 0; display:block; width:255px; float:left }
+    .aside > div { margin-bottom: 15px }
+    .aside > div div:first-child { border-top-left-radius:4px; border-top-right-radius:4px }
+    .aside > div div:last-child { border-bottom-left-radius:4px; border-bottom-right-radius:4px }
+    .navcls { color:#678; background:#eee; border:1px solid #ddd; margin-bottom:-1px; display:block; padding:8px 9px; font-weight:bold; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer }
+    .navcls.expanded { color:#469 }
+    .navcls.active { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+    .navmet { color:#555; background:#fff; border:1px solid #ddd; font-size:12px; display:block; margin-bottom:-1px; padding:8px 10px; text-align:left; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; cursor:pointer }
+    .navmet:hover { background:#f8f8f8 }
+    .navmet.active, .navmet.active:hover { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+
+    .tabs { list-style:outside none none; margin:0 0 5px; padding:0; border-bottom:1px solid #ddd }
+    .tabs:after { clear:both }
+    .tabs li { float:left; margin-bottom:-1px; display:block; position:relative }
+    .tabs li div { border:1px solid transparent; border-radius:4px 4px 0 0; line-height:20px; margin-right:2px; padding:10px 15px; color:#428bca }
+    .tabs li div:hover { border-color:#eee #eee #ddd; background:#eee; cursor:pointer; }
+    .tabs li.active div { background:#fff; border-color:#ddd #ddd transparent; border-style:solid; border-width:1px; color:#555; cursor:default }
+    .failure-mesg { color:#900 }
+    .failure-trace { color:#333; white-space:pre; overflow:auto }
+
+    .link { color:#428BCA; padding:5px 15px 5px 5px; text-decoration:underline; cursor:pointer }
+    .link.active { color:#333; text-decoration:none }
+
+    .chart { padding:0; margin:0; width:890px }
+    .chart svg { height:300px; padding:0; margin:0; overflow:visible; float:right }
+    .chart.lower svg { height:180px }
+    .chart-label-y { font-size:12px; position:relative; top:5px; padding:0; margin:0 }
+
+    .expandable { cursor:pointer }
+    .clearfix { clear:both }
+    .sortable > .arrow { display:inline-block; width:12px; height:inherit; color:#c90 }
+    .content-main { margin:0 5px; display:block; float:left }
+
+    .content-wrap {  margin:0 auto; padding:0 5px </%block>}
+    
+    @media only screen and (min-width: 320px)  { .content-wrap { width:900px  } .content-main { width:600px } }
+    @media only screen and (min-width: 900px)  { .content-wrap { width:880px  } .content-main { width:590px } }
+    @media only screen and (min-width: 1000px) { .content-wrap { width:980px  } .content-main { width:690px } }
+    @media only screen and (min-width: 1100px) { .content-wrap { width:1080px } .content-main { width:790px } }
+    @media only screen and (min-width: 1200px) { .content-wrap { width:1180px } .content-main { width:890px } }
+
+  </style>
+</head>
+<body ng-controller="Controller">
+
+  <div class="header">
+    <div class="content-wrap">
+      <a href="https://github.com/openstack/rally">Rally</a>&nbsp;
+      <span>task results</span>
+    </div>
+  </div>
+
+  <div class="content-wrap">
+    
+
+    <p id="page-error" class="notify-error" style="display:none"></p>
+
+    <div id="content-nav" class="aside" ng-show="scenarios.length" ng-cloack>
+      <div>
+        <div class="navcls"
+             ng-class="{active:view.is_main}"
+             ng-click="location.path('')">Task overview</div>
+        <div class="navcls"
+             ng-class="{active:view.is_source}"
+             ng-click="location.path('source', '')">Input file</div>
+      </div>
+      <div>
+        <div class="navcls" title="{{n.cls}}"
+             ng-repeat-start="n in nav track by $index"
+             ng-click="showNav(n.idx)"
+             ng-class="{expanded:n.idx==nav_idx}">
+                <span ng-hide="n.idx==nav_idx">&#9658;</span>
+                <span ng-show="n.idx==nav_idx">&#9660;</span>
+                {{n.cls}}</div>
+        <div class="navmet" title="{{m.name}}"
+             ng-show="n.idx==nav_idx"
+             ng-class="{active:m.ref==scenario.ref}"
+             ng-click="location.path(m.ref)"
+             ng-repeat="m in n.met track by $index"
+             ng-repeat-end>{{m.name}}</div>
+      </div>
+    </div>
+
+    <div id="content-main" class="content-main" ng-show="scenarios.length" ng-cloak>
+
+      <div ng-show="view.is_main">
+        <h1>Task overview</h1>
+        <table class="linked compact"
+               ng-init="ov_srt='ref'; ov_dir=false">
+          <thead>
+            <tr>
+              <th class="sortable"
+                  title="Scenario name, with optional suffix of call number"
+                  ng-click="ov_srt='ref'; ov_dir=!ov_dir">
+                Scenario
+                <span class="arrow">
+                  <b ng-show="ov_srt=='ref' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='ref' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="How long the scenario run, without context duration"
+                  ng-click="ov_srt='load_duration'; ov_dir=!ov_dir">
+                Load duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='load_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='load_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="Scenario duration plus context duration"
+                  ng-click="ov_srt='full_duration'; ov_dir=!ov_dir">
+                Full duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='full_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='full_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of iterations"
+                  ng-click="ov_srt='iterations_count'; ov_dir=!ov_dir">
+                Iterations
+                <span class="arrow">
+                  <b ng-show="ov_srt=='iterations_count' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='iterations_count' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Scenario runner type"
+                  ng-click="ov_srt='runner'; ov_dir=!ov_dir">
+                Runner
+                <span class="arrow">
+                  <b ng-show="ov_srt=='runner' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='runner' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of errors occurred"
+                  ng-click="ov_srt='errors.length'; ov_dir=!ov_dir">
+                Errors
+                <span class="arrow">
+                  <b ng-show="ov_srt=='errors.length' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='errors.length' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Whether SLA check is successful"
+                  ng-click="ov_srt='sla_success'; ov_dir=!ov_dir">
+                Success (SLA)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='sla_success' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='sla_success' && ov_dir">&#x25be;</b>
+                </span>
+            <tr>
+          </thead>
+          <tbody>
+            <tr ng-repeat="sc in scenarios | orderBy:ov_srt:ov_dir"
+                ng-click="location.path(sc.ref)">
+              <td>{{sc.ref}}
+              <td>{{sc.load_duration | number:3}}
+              <td>{{sc.full_duration | number:3}}
+              <td>{{sc.iterations_count}}
+              <td>{{sc.runner}}
+              <td>{{sc.errors.length}}
+              <td>
+                <span ng-show="sc.sla_success" class="status-pass">&#x2714;</span>
+                <span ng-hide="sc.sla_success" class="status-fail">&#x2716;</span>
+            <tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div ng-show="view.is_source">
+        <h1>Input file</h1>
+        <pre class="code">{{source}}</pre>
+      </div>
+
+      <div ng-show="view.is_scenario">
+        <h1>{{scenario.cls}}.<wbr>{{scenario.name}} ({{scenario.full_duration | number:3}}s)</h1>
+        <ul class="tabs">
+          <li ng-repeat="t in tabs"
+              ng-show="t.isVisible()"
+              ng-class="{active:t.id == tab}"
+              ng-click="location.hash(t.id)">
+            <div>{{t.name}}</div>
+          </li>
+          <div class="clearfix"></div>
+        </ul>
+        <div ng-include="tab"></div>
+
+        <script type="text/ng-template" id="overview">
+          <p class="thesis">
+            Load duration: <b>{{scenario.load_duration | number:3}} s</b> &nbsp;
+            Full duration: <b>{{scenario.full_duration | number:3}} s</b> &nbsp;
+            Iterations: <b>{{scenario.iterations_count}}</b> &nbsp;
+            Failures: <b>{{scenario.errors.length}}</b>
+          </p>
+
+          <div ng-show="scenario.sla.length">
+            <h2>Service-level agreement</h2>
+            <table class="striped">
+              <thead>
+                <tr>
+                  <th>Criterion
+                  <th>Detail
+                  <th>Success
+                <tr>
+              </thead>
+              <tbody>
+                <tr class="rich"
+                    ng-repeat="row in scenario.sla track by $index"
+                    ng-class="{'status-fail':!row.success, 'status-pass':row.success}">
+                  <td>{{row.criterion}}
+                  <td>{{row.detail}}
+                  <td class="capitalize">{{row.success}}
+                <tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div widget="Table"
+               data="scenario.table"
+               lastrow-class="rich"
+               title="Total durations">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.iterations.iter"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.load_profile"
+               title="Load Profile"
+               title-class="h3"
+               name-x="Timeline (seconds)"
+               format-y="d"
+               format-x=",.2f"
+               class="lower">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.iterations.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; width:40%; margin-top:15px">
+          </div>
+
+          <div widget="Histogram"
+               ng-if="scenario.iterations.histogram.data.length"
+               data="scenario.iterations.histogram.data[mainHistogram.id]"
+               style="float:left; width:59%; margin-top:15px; position:relative; top:40px">
+          </div>
+
+          <select ng-model="mainHistogram"
+                  ng-show="scenario.iterations.histogram.data.length"
+                  ng-options="i.name for i in scenario.iterations.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="details">
+
+          <div widget="StackedArea"
+               data="scenario.atomic.iter"
+               title="Atomic Action Durations"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.atomic.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; margin-top:15px"
+               ng-style="compact_atomics() ? {width:'40%'} : {}">
+          </div>
+
+          <div widget="Histogram" data="scenario.atomic.histogram.data[atomicHistogram.id]"
+               ng-if="scenario.atomic.histogram.data.length"
+               style="float:left; position:relative; top:40px"
+               ng-style="compact_atomics() ? {width:'59%', 'margin-top':'15px'} : {}">
+          </div>
+
+          <select ng-show="scenario.atomic.histogram.data.length"
+                  ng-model="atomicHistogram"
+                  ng-options="i.name for i in scenario.atomic.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="output">
+
+          <div style="padding:10px 0 0">
+            <span class="link"
+                  ng-click="location.hash('output/additive')"
+                  ng-class="{active:scenario.output.active === 'additive'}"
+                  ng-if="scenario.output.has_additive">Aggregated</span>
+            <span class="link"
+                  ng-click="location.hash('output/complete')"
+                  ng-class="{active:scenario.output.active === 'complete'}"
+                  ng-if="scenario.output.has_complete">Per iteration</span>
+          </div>
+
+          <div ng-repeat="chart in scenario.additive_output"
+               ng-if="scenario.output.active === 'additive'">
+            <div widget="{{chart.widget}}"
+                 title="{{chart.title}}"
+                 description="{{chart.description}}"
+                 name-x="{{chart.axis_label}}"
+                 name-y="{{chart.label}}"
+                 data="chart.data">
+            </div>
+          </div>
+
+          <div ng-if="scenario.output.active === 'complete'" style="padding:10px 0 0">
+            <select ng-model="outputIteration">
+              <option ng-repeat="i in scenario.complete_output track by $index"
+                      value="{{$index}}">
+                Iteration {{$index}}
+            </select>
+
+            <div ng-repeat="chart in scenario.complete_output[outputIteration]">
+              <div widget="{{chart.widget}}"
+                   title="{{chart.title}}"
+                   description="{{chart.description}}"
+                   name-x="{{chart.axis_label}}"
+                   name-y="{{chart.label}}"
+                   data="chart.data">
+              </div>
+            </div>
+          </div>
+        </script>
+
+        <script type="text/ng-template" id="failures">
+          <h2>Task failures (<ng-pluralize
+            count="scenario.errors.length"
+            when="{'1': '1 iteration', 'other': '{} iterations'}"></ng-pluralize> failed)
+          </h2>
+          <table class="striped">
+            <thead>
+              <tr>
+                <th>
+                <th>Iteration
+                <th>Exception type
+                <th>Exception message
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="expandable"
+                  ng-repeat-start="i in scenario.errors track by $index"
+                  ng-click="i.expanded = ! i.expanded">
+                <td>
+                  <span ng-hide="i.expanded">&#9658;</span>
+                  <span ng-show="i.expanded">&#9660;</span>
+                <td>{{i.iteration}}
+                <td>{{i.type}}
+                <td class="failure-mesg">{{i.message}}
+              </tr>
+              <tr ng-show="i.expanded" ng-repeat-end>
+                <td colspan="4" class="failure-trace">{{i.traceback}}
+              </tr>
+            </tbody>
+          </table>
+        </script>
+
+        <script type="text/ng-template" id="task">
+          <h2>Subtask Configuration</h2>
+          <pre class="code">{{scenario.config}}</pre>
+        </script>
+      </div>
+
+    </div>
+    <div class="clearfix"></div>
+
+
+  </div>
+
+  <script type="text/javascript">
+    if (! window.angular) {(function(f){
+      f(document.getElementById("content-nav"), "none");
+      f(document.getElementById("content-main"), "none");
+      f(document.getElementById("page-error"), "block").textContent = "Failed to load AngularJS framework"
+    })(function(e, s){e.style.display = s; return e})}
+</script>
+</body>
+</html>
