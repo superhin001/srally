@@ -1,6 +1,7 @@
 #/bin/bash
 source profile
 PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/home/kevin/rally/bin'
+cd /root/hzc/20161209
 
 run_tasks()
 {
