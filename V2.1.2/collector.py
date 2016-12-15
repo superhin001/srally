@@ -167,7 +167,7 @@ class Collector(object):
                     er_reg = r'"errors",.(\d+)\]'
                     ms_reg = r'"type":."(.*?",."message":.".*?)\\n.*?",'
                     id_reg = r'\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
-                    cc_reg = r'concurrency.{3,5}(\d+),'
+                    cc_reg = r'concurrency.{3,4}(\d+),'
 
                     fd_reg_c = re.compile(fd_reg)
                     ic_reg_c = re.compile(ic_reg)
@@ -212,9 +212,11 @@ class Collector(object):
                             for error_message in ms_report:
                                 error_message = error_message.replace('", "message": "', ':')
                                 duplicate = False
+                                error_count = 1
                                 for cur_error_message in error_list:
                                     if error_message[:30] == cur_error_message[:30]:
                                         duplicate = True
+                                        error_count += 1
                                         break
                                     else:
                                         duplicate = False
