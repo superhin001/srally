@@ -5,9 +5,9 @@ cd /root/hzc/20161209
 
 run_tasks()
 {
-export now=`date +%Y%m%d_%H%M%S`
-export report_dir=report/${now}
-export error_dir=report/${now}/error_tasks
+now=`date +%Y%m%d_%H%M%S`
+report_dir=report/${now}
+error_dir=report/${now}/error_tasks
 start_time=`date '+%Y-%m-%d %H:%M:%S'`
 
 if [ ! -d "report" ]; then
@@ -19,8 +19,8 @@ echo "--------------------------------------------------------------------------
 echo "Rally Test Start"
 echo "----------------------------------------------------------------------------"
 total=`ls *.json | wc -l`
-pass=0
-fail=0
+export pass=0
+export fail=0
 for filename in `ls *.json`
 do
     echo $filename
@@ -30,23 +30,23 @@ do
 	is_na = `cat ${report_dir}/${filename%.*}.log | grep 'n/a'` 2>/dev/null
 	echo $reportcmd
 	if [ -z "$reportcmd" ] || [ -n "$is_na" ]; then
-        let "fail=fail+1"
+        fail=`expr $fail + 1`
 		echo "can't find reportcmd"
 		cp $filename ${error_dir}/
         cp ${report_dir}/${filename%.*}.log ${error_dir}/
 	else
-        let "pass=pass+1"
+        pass=`expr $pass+1`
 		${reportcmd} ${report_dir}/${filename%.*}.html
 	fi
 	sleep 5
 done 
-export end_time=`date '+%Y-%m-%d %H:%M:%S'`
-start_stamp=`date -d "$end_time" +%s`
-end_stamp=`date -d "$start_time" +%s`
-let "duration_time=($end_stamp-$start_stamp)"
-let "duration_h=($duration_time/3600)"
-let "duration_m=($duration_time%3600/60)"
-let "duration_s=($duration_time%60)"
+end_time=`date '+%Y-%m-%d %H:%M:%S'`
+start_stamp=`date -d "$start_time" +%s`
+end_stamp=`date -d "$end_time" +%s`
+let "duration_time=(end_stamp-start_stamp)"
+let "duration_h=(duration_time/3600)"
+let "duration_m=(duration_time%3600/60)"
+let "duration_s=(duration_time%60)"
 echo "----------------------------------------------------------------------------"
 echo "Start Time: ${start_time}    End Time: ${end_time}"
 echo "Full Duration: ${duration_h} h  ${duration_m} m  ${duration_s} s"
